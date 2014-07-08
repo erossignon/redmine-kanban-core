@@ -32,6 +32,7 @@ function makeFakeItem(title, progress, parent_id) {
             var status = short_to_Status[c];
             if (status === "New" && ticket === null) {
                 ticket = new WorkItem({ id: _get_next_id(), subject: title, created_on: current_date , parent_id: parent_id});
+
             }
             if (ticket) {
                 var current_status = ticket.find_status_at_date(current_date);
