@@ -1,0 +1,39 @@
+{
+  "name": "redmine-kanban-core",
+  "version": "0.0.1",
+  "description": "Core Library for Redmine Kanban",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha -R spec --recursive test --timeout 10000"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/erossignon/redmine-kanban-core"
+  },
+  "keywords": [
+    "Redmine",
+    "Kanban"
+  ],
+  "author": {
+    "name": "Etienne Rossignon"
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/erossignon/redmine-kanban-core/issues"
+  },
+  "homepage": "https://github.com/erossignon/redmine-kanban-core",
+  "devDependencies": {
+    "should": "^4.0.4"
+  },
+  "dependencies": {
+    "bson": "^0.2.9",
+    "colors": "^0.6.2",
+    "enum": "^0.2.6",
+    "harmony-collections": "^0.3.8",
+    "mousse": "^0.3.0",
+    "serialijse": "0.0.3",
+    "underscore": "^1.6.0"
+  },
+  "readme": "tools for redmine_kanban\n",
+  "readmeFilename": "README.md"
+}

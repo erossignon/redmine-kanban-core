@@ -1,0 +1,8 @@
+.idea/
+node_modules
+test/config.js
+tmp
+toto*
+test/temp
+___.git
+*_old___
