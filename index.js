@@ -15,3 +15,7 @@ exports.throughput_progression  =require("./lib/kanban_kpi/throughput_progressio
 exports.calculate_progression   =require("./lib/kanbanstatistics").calculate_progression;
 exports.average_lead_time_progression =require("./lib/kanbanstatistics").average_lead_time_progression;
 exports.statistics = require("./lib/kanbanstatistics").statistics;
+
+
+exports.dump_user_story = require("./lib/dump_workitems").dump_user_story;
+

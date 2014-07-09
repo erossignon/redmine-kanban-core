@@ -4,6 +4,7 @@
   "description": "Core Library for Redmine Kanban",
   "main": "index.js",
   "scripts": {
+    "preinstall": "browserify index.js > redmine-kanban-core.bundle.js",
     "test": "mocha -R spec --recursive test --timeout 10000"
   },
   "repository": {
