@@ -1,3984 +1,6 @@
-(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);throw new Error("Cannot find module '"+o+"'")}var f=n[o]={exports:{}};t[o][0].call(f.exports,function(e){var n=t[o][1][e];return s(n?n:e)},f,f.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+(function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
 
-
-exports.RedmineImporter = require("./lib/import/redmine_importer").RedmineImporter;
-exports.build_time_line = require("./lib/timeline").build_time_line;
-exports.statistics   = require("./lib/kanbanstatistics").statistics;
-exports.Today        = require("./lib/today").Today;
-exports.WorkItem     = require("./lib/workitem").WorkItem;
-exports.Project      = require("./lib/project").Project;
-exports.get_projet_names = require("./lib/workitem_utils").get_projet_names;
-exports.get_start_date = require("./lib/workitem_utils").get_start_date;
-exports.get_last_updated_date = require("./lib/workitem_utils").get_last_updated_date;
-exports.dateToYMD = require("./lib/utils").dateToYMD;
-exports.dump_use_cases = require("./lib/dump_workitems").dump_use_cases;
-exports.throughput_progression  =require("./lib/kanban_kpi/throughput_progression").throughput_progression;
-exports.calculate_progression   =require("./lib/kanbanstatistics").calculate_progression;
-exports.average_lead_time_progression =require("./lib/kanbanstatistics").average_lead_time_progression;
-exports.statistics = require("./lib/kanbanstatistics").statistics;
-
-
-exports.dump_user_story = require("./lib/dump_workitems").dump_user_story;
-
-
-},{"./lib/dump_workitems":3,"./lib/import/redmine_importer":5,"./lib/kanban_kpi/throughput_progression":8,"./lib/kanbanstatistics":11,"./lib/project":12,"./lib/timeline":13,"./lib/today":14,"./lib/utils":15,"./lib/workitem":16,"./lib/workitem_utils":17}],2:[function(require,module,exports){
-// The MIT License (MIT)
-//
-// Copyright (c) 2014 Etienne Rossignon
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-"use strict";
-
-var HashMap = require("./hashmap").HashMap;
-var WorkItem = require("./workitem").WorkItem;
-var tl = require('./timeline');
-var assert = require("assert");
-
-var Project = require("./project").Project;
-
-var calculate_defects_statistics = require("./kanban_kpi/calculate_workitem_statistics.js").calculate_defects_statistics;
-var calculate_use_case_statistics = require("./kanban_kpi/calculate_workitem_statistics.js").calculate_use_case_statistics;
-var calculate_user_story_statistics = require("./kanban_kpi/calculate_workitem_statistics.js").calculate_user_story_statistics;
-
-Project.prototype.associate_use_case_and_user_stories = function() {
-
-    var self = this;
-
-    var ticket_map = new HashMap();
-
-    // construct ticket map
-    self._work_items.forEach(function(ticket){ ticket_map.set(ticket.id, ticket); });
-
-    function add_workitem(workitem) {
-        self.add_work_item(workitem);
-        ticket_map.set(workitem.id,workitem);
-    }
-    /**
-     * get the special Use case used as the parent of the unattached user stories
-     * @returns {WorkItem}
-     */
-    function get_floating_use_case() {
-
-        var uc =ticket_map.get("floating-UC");
-
-        if (!uc) {
-            uc = new WorkItem({
-                id: "floating-UC",
-                type: "U-C",
-                current_status: "YYY",
-                subject:" Use Case for unattached user stories",
-                parent_id: "noparent"
-            });
-            add_workitem(uc);
-        }
-        return uc;
-    }
-
-    /**
-     * get the parent use case work item of the given work item
-     * @param ticket
-     * @returns {WorkItem}
-     */
-    function get_or_create_use_case_for_user_story(ticket) {
-        assert(ticket.type === "U-S");
-        var uc = ticket_map.get(ticket.parent_id);
-        if (!uc) {
-            uc = get_floating_use_case();
-        }
-        return uc;
-    }
-
-    function get_floating_user_story() {
-
-        var us = ticket_map.get("floating")
-        if (!us) {
-            var floating_use_case = get_floating_use_case();
-
-            us = new WorkItem({
-                id: "floating",
-                type: "U-S",
-                parent_id: floating_use_case.id,
-                current_status: "New",
-                subject: "floating user story for unattached defects",
-                fixed_version: "Bugs"
-            });
-
-            add_workitem(us);
-            floating_use_case.children.push(us);
-        }
-        assert( us instanceof WorkItem);
-        return us;
-    }
-
-    function get_or_create_user_story_for_defect(ticket) {
-
-        var p = ticket.parent_id;
-
-        if (p === "noparent") {
-
-            ticket.relations.forEach(function (relation_id) {
-                var related_ticket = ticket_map.get(relation_id);
-                if (related_ticket.type === "U-S") {
-                    ticket.parent_id = relation_id;
-                    return us;
-                }
-                if (related_ticket.type === "U-C") {
-                    // l'anomalie est rattachée à une UC par relation
-                }
-            });
-        }
-        var parent_ticket = ticket_map.get(ticket.parent_id);
-        if (!parent_ticket) {
-            parent_ticket = get_floating_user_story();
-        }
-        assert( parent_ticket instanceof WorkItem);
-        return parent_ticket;
-    }
-
-    function attach_user_story_to_use_case(ticket) {
-        var uc = get_or_create_use_case_for_user_story(ticket);
-        uc.children.push(ticket);
-    }
-
-    function attach_defect_to_user_story(ticket) {
-        var us = get_or_create_user_story_for_defect(ticket);
-        us.defects.push(ticket);
-    }
-    function attach_use_case_to_use_case(ticket) {
-        var p = ticket_map.get(ticket.parent_id);
-        if (p) {
-            p.children.push(ticket);
-        }
-    }
-
-    self.use_cases.forEach(attach_use_case_to_use_case);
-
-    // attach user stories to use cases
-    self.user_stories.forEach(attach_user_story_to_use_case);
-
-    // attach defect to user stories
-    self.defects.forEach(attach_defect_to_user_story);
-
-    self.use_cases.forEach(function (ticket) {
-        ticket.stats = calculate_use_case_statistics(ticket);
-    });
-
-    self.user_stories.forEach(function (ticket) {
-        ticket.stats = calculate_user_story_statistics(ticket);
-    });
-
-    return self.top_level_use_cases;
-};
-
-},{"./hashmap":4,"./kanban_kpi/calculate_workitem_statistics.js":6,"./project":12,"./timeline":13,"./workitem":16,"assert":23}],3:[function(require,module,exports){
-var assert=require("assert");
-var tl = require('./timeline');
-
-var ellipsys = require("./utils").ellipsys;
-var Project = require("./project").Project;
-function w(str,width) {
-    return ("" + str + "                         ").substr(0,width);
-}
-
-
-function dump_user_story(level,us,timeline) {
-
-    var ret = us.progress_bar(timeline);
-    console.warn("  ", us.type, "   ", w(us.current_status,3), w(us.id,5),  us.unplanned ? "??" : "  ", ret, ellipsys(us.subject, 40),us.fixed_version,us.current_status);
-    us.defects.forEach(function (bug) {
-        var ret = bug.progress_bar(timeline);
-        if (bug.current_status === "Done") {
-            console.warn("   ok ", bug.type, w(bug.current_status,3), w(bug.id,5), bug.unplanned ? "??" : "  ", ret, ellipsys(bug.subject, 40));
-        } else {
-            console.warn("    !!", bug.type, w(bug.current_status,3), w(bug.id,5), bug.unplanned ? "??" : "  ", ret, ellipsys(bug.subject, 40));
-        }
-    });
-
-}
-
-/**
- *
- * @param uc {WorkItem} a use case.
- * @poram
- */
-function dump_use_case(level,uc,timeline) {
-
-  console.warn( level + "Use case : ", w(uc.id,5), w(uc.percent_done(),3)+"%", uc.subject);
-
-  uc.use_cases.forEach(function (child_uc) {
-      dump_use_case(level + "  ",child_uc,timeline);
-  });
-
-  uc.user_stories.forEach(function (us) {
-      dump_user_story(level,us,timeline);
-  });
-}
-
-require("./associate_use_case_and_user_stories");
-function dump_use_cases(project,startDate,endDate,today) {
-    "use strict";
-    assert(project instanceof Project);
-    assert(startDate);
-    assert(endDate);
-    assert(today);
-
-    console.log(" start date = ", startDate);
-    console.log(" end date   = ", endDate);
-    console.log(" today      = ", today);
-    var use_cases = project.associate_use_case_and_user_stories();
-    assert(startDate !== null);
-
-    startDate = new Date(startDate);
-    endDate =   new Date(endDate);
-    today   = new Date(today);
-    var timeline = tl.build_time_line(startDate,today);
-
-    var level = " ";
-    use_cases.forEach(function (uc) {   dump_use_case(level,uc,timeline);   });
-}
-exports.dump_use_cases= dump_use_cases;
-exports.dump_user_story= dump_user_story;
-},{"./associate_use_case_and_user_stories":2,"./project":12,"./timeline":13,"./utils":15,"assert":23}],4:[function(require,module,exports){
-
-// module.exports =  require("harmony-collections");
-
-
-
-function HashMap(iteratable) {
-
-   // TODO __defineGetter : length as a readonly property
-   Object.defineProperty(this,"length", { get: function(){return this.size(); },  enumerable: false });
-
-   this._internal = {};
-   if (iteratable) {
-        for (v in iteratable) { this.set(v,iteratable[v]);  }
-}
-}
-
-HashMap.prototype.set = function(key, value) {
-  "use strict";
-  this._internal[key] = value;
-};
-
-HashMap.prototype.has = function(key) {
-    return typeof this._internal[key] === 'undefined' ? false: true;
-};
-
-/**
- * Returns the value associated to the key, or undefined if there is none.
- */
-HashMap.prototype.get = function(key) {
-  "use strict";
-  return this._internal[key];
-};
-
-HashMap.prototype.size = function() {
-  "use strict";
-  var count = 0;
-  for (var prop in this._internal) {
-    if(this._internal.hasOwnProperty(prop)) {
-      count++;
-    }
-  }
-  return count;
-};
-
-HashMap.prototype.forEach = function(func) {
-  "use strict";
-  for (var prop in this._internal) {
-    if(this._internal.hasOwnProperty(prop)) {
-      func(this._internal[prop],prop);
-    }
-  }
-};
-
-exports.HashMap = HashMap;
-
-
-},{}],5:[function(require,module,exports){
-/**
- *
- * @constructor
- */
-function RedmineImporter(){
-
-}
-RedmineImporter.prototype.foo = function()
-{
-
-}
-
-exports.RedmineImporter = RedmineImporter;
-
-},{}],6:[function(require,module,exports){
-// The MIT License (MIT)
-//
-// Copyright (c) 2014 Etienne Rossignon
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
-var WorkItem = require("../workitem").WorkItem;
-var assert = require("assert");
-
-function calculate_defects_statistics(work_item) {
-  "use strict";
-  assert(work_item instanceof WorkItem);
-  var ret = {};
-  ret.nb_defects = 0;
-  ret.nb_defects_done = 0;
-  ret.nb_defects_planned = 0;
-  ret.nb_defects_unplanned = 0;
-  if (!work_item.defects) return ret;
-
-  work_item.defects.forEach(function (defect) {
-
-    ret.nb_defects++;
-
-    if (defect.unplanned) {
-      ret.nb_defects_unplanned++;
-    } else {
-      if (defect.is_done()) {
-        ret.nb_defects_done++;
-      } else {
-        ret.nb_defects_planned++;
-      }
-    }
-  });
-
-  return ret;
-}
-
-function calculate_user_story_statistics(user_story) {
-  "use strict";
-  return calculate_defects_statistics(user_story);
-}
-
-
-/**
- * @deprecated
- * @param use_case
- * @returns {{}}
- */
-function calculate_use_case_statistics(use_case) {
-
-  "use strict";
-  assert(use_case instanceof WorkItem);
-
-  // unplanned user stories are ignored
-
-  var ret = {
-    consolidated_percent_done: 0,
-    nb_user_stories :0,
-    nb_user_stories_planned: 0,
-    nb_user_stories_unplanned:  0,
-    nb_user_stories_done: 0,
-    nb_defects: 0, // nb defects
-    nb_defects_done: 0,
-    nb_defects_planned: 0,
-    nb_defects_unplanned: 0,
-  };
-
-
-  var own_stat = calculate_defects_statistics(use_case);
-
-  ret.nb_defects           += own_stat.nb_defects;
-  ret.nb_defects_done      += own_stat.nb_defects_done;
-  ret.nb_defects_planned   += own_stat.nb_defects_planned;
-  ret.nb_defects_unplanned += own_stat.nb_defects_unplanned;
-
-  use_case.children.forEach(function (us) {
-    ret.nb_user_stories++;
-
-    if (us.unplanned) {
-      // console.warn(" UNPLANNED US ",us.unplanned,us.fixed_version);
-      ret.nb_user_stories_unplanned++;
-
-    } else {
-
-      var stat_us = calculate_defects_statistics(us);
-      ret.nb_defects += stat_us.nb_defects;
-      ret.nb_defects_done += stat_us.nb_defects_done;
-      ret.nb_defects_planned += stat_us.nb_defects_planned;
-      ret.nb_defects_unplanned += stat_us.nb_defects_unplanned;
-
-      if (us.is_done()) {
-        ret.nb_user_stories_done++;
-      } else {
-        ret.nb_user_stories_planned++;
-      }
-    }
-  });
-  assert.equal(ret.nb_user_stories, use_case.children.length);
-  assert.equal(ret.nb_user_stories,
-      ret.nb_user_stories_unplanned + ret.nb_user_stories_done + ret.nb_user_stories_planned);
-
-  return ret;
-}
-
-
-exports.calculate_use_case_statistics = calculate_use_case_statistics;
-exports.calculate_defects_statistics = calculate_defects_statistics;
-exports.calculate_user_story_statistics = calculate_user_story_statistics;
-
-
-},{"../workitem":16,"assert":23}],7:[function(require,module,exports){
-// The MIT License (MIT)
-//
-// Copyright (c) 2014 Etienne Rossignon
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-var _ = require("underscore");
-
-function filter_tickets_for_average_lead_time_calculation(tickets, pivot_date, width) {
-
-  "use strict";
-  if (width <= 1) width = 2;
-
-  // width is in Business days
-  var low_date = pivot_date.removeBusinessDay(width / 2);
-
-  var high_date = pivot_date.addBusinessDay(width / 2);
-
-  //        L  p  H
-  //        |  |  |
-  // XXX    |  |  |         KO  (a)
-  //        |  |  |  XXX    KO  (b)
-  // ......X|XXyXX|X......  OK  (c)
-  // ......X|XXyX.|.......  OK  (c)
-  // .......|.XyXX|XXXXXX.  OK  (c)
-  // .......|.XyXX|XXXXXXX  KO  (d)
-
-
-  return tickets.filter(function (ticket) {
-
-    if (ticket.unplanned) {
-      return false;
-    }
-    if (ticket.current_status !== "Done") { // (case d)
-      // now we consider that undone ticket can be used to calculate lead time
-      // BEFORE => return false; // cannot be used to calculate lead time
-    }
-    // filter out tickets that don't exist at pivot date
-    if (ticket.created_on > high_date) { // (case b)
-      return false;
-    }
-    // filter out tickets that are not yet started at end date
-    var status_at_high_date = ticket.find_status_at_date(high_date);
-    if (status_at_high_date === "unknown") { // (case b)
-      return false;
-    }
-
-    // filter out tickets that are already completed at low date
-    var start_status = ticket.find_status_at_date(low_date);
-    if (start_status === "Done") { // case a
-      return false;
-    }
-    // take into account case c,c,c
-    return true;
-  });
-}
-
-
-function calculate_average_lead_time(tickets, pivot_date, width) {
-  "use strict";
-  var arr = filter_tickets_for_average_lead_time_calculation(tickets, pivot_date, width);
-
-  if (arr.length === 0) {
-    return  {
-      min_value: 0,
-      average: 0,
-      max_value: 0,
-      std_deviation: 0,
-      count: 0
-    };
-  }
-
-  var values = arr.map(function (element) {
-    return element.calculate_lead_time(pivot_date);
-  });
-
-  values = values.filter(function (element) {
-    return element !== undefined;
-  });
-
-  // extract the minimum lead time
-  var min_val = values.reduce(function (previousValue, currentValue, index, array) {
-    return (currentValue < previousValue) ? currentValue : previousValue;
-  }, values[0]);
-
-
-  // extract the greatest lead time
-  var max_val = values.reduce(function (previousValue, currentValue, index, array) {
-    return (currentValue > previousValue) ? currentValue : previousValue;
-  }, values[0]);
-
-  var sum = values.reduce(function (previousValue, currentValue) {
-    return previousValue + currentValue;
-  }, 0);
-
-  var n = arr.length;
-  var average = sum / n;
-
-  var variance = values.reduce(function (sum, value) {
-    var a = (value - average);
-    return sum + (a * a) / (n - 1);
-  }, 0);
-
-  var std_deviation = Math.sqrt(variance);
-
-  var ret = {
-    min_value: min_val,
-    average: Math.round(average * 10) / 10,
-    max_value: max_val,
-    std_deviation: std_deviation,
-    count: arr.length
-  };
-//   console.warn(ret);
-  return ret;
-}
-exports.calculate_average_lead_time = calculate_average_lead_time;
-
-function lead_time_KPI(tickets, endDate) {
-  var lead_time = calculate_average_lead_time(tickets, endDate, 20);
-  return  Math.round(lead_time.average * 100) / 100;
-}
-exports.lead_time_KPI = lead_time_KPI;
-},{"underscore":21}],8:[function(require,module,exports){
-// The MIT License (MIT)
-//
-// Copyright (c) 2014 Etienne Rossignon
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
-var assert = require("assert");
-var _ = require("underscore");
-var HashMap = require("../hashmap").HashMap;
-var calculate_wip = require("./work_in_progress").calculate_wip;
-
-/**
- *
- * @param tickets {Array<WorkItem>} the workitem to extract statistics from
- * @param timeline {Array<Date>}  the coresponding timeline
- * @param width
- * @returns {HashMap}
- */
-function throughput_progression(tickets, timeline, width) {
-
-    "use strict";
-
-    assert(_.isArray(tickets));
-    assert(_.isArray(timeline));
-
-    var wip_new_array = timeline.map(function (date) {
-        return calculate_wip(tickets, date);
-    });
-    var throughput = new HashMap();
-    throughput['through_in'] = {name: "Through In", type: 'number', data: []};
-    throughput['through_out'] = {name: "Through Out", type: 'number', data: []};
-
-    wip_new_array.forEach(function (e, index, array) {
-
-        if (index <= width) {
-            throughput.through_in.data.push(0);
-            throughput.through_out.data.push(0);
-            return;
-        }
-        var eb = array[index - width];
-        var wip_new_before = eb.planned + eb.in_progress + eb.done;
-        var wip_new_current = e.planned + e.in_progress + e.done;
-        var done_current = e.done;
-        var done_before = eb.done;
-
-        throughput.through_in.data.push(wip_new_current - wip_new_before);
-        throughput.through_out.data.push(done_current - done_before);
-    });
-
-    // average per day
-    throughput.through_in.data = throughput.through_in.data.map(function (e) {
-        return e / width;
-    });
-    throughput.through_out.data = throughput.through_out.data.map(function (e) {
-        return e / width;
-    });
-    return throughput;
-}
-
-exports.throughput_progression = throughput_progression;
-},{"../hashmap":4,"./work_in_progress":10,"assert":23,"underscore":21}],9:[function(require,module,exports){
-// The MIT License (MIT)
-//
-// Copyright (c) 2014 Etienne Rossignon
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
-var assert=require("assert");
-var _ = require("underscore");
-var tl = require("../timeline");
-
-var throughput_progression = require("./throughput_progression").throughput_progression;
-/**
- *
- * @param tickets {Array<WorkItem>}
- * @param endDate {Date}
- * @returns {number}
- */
-function velocity_KPI(tickets, endDate) {
-
-  "use strict";
-  assert(_.isArray(tickets));
-
-  var startDate = new Date(endDate);
-
-  startDate = endDate.removeBusinessDay(40);
-
-  console.warn(" Start Date", startDate);
-  console.warn(" End Date " , endDate);
-
-  var timeline =   tl.build_time_line(startDate, endDate);
-  var throughput = throughput_progression(tickets, timeline, 20);
-
-
-  // method 1  : we use an averaged velocity
-  var a1 = throughput.through_out.data.reduce(function (sum, a) {
-    return sum + a;
-  });
-  var c1 = throughput.through_out.data.reduce(function (sum, a) {
-    return (a !== 0) ? sum + 1 : sum;
-  });
-  var velocity1 = a1 / c1;
-
-  // method 2 : we use the most recent velocity
-  var velocity2 = throughput.through_out.data[throughput.through_out.data.length - 1];
-
-  var velocity = (velocity2 < velocity1) ? velocity1 : velocity2;
-
-  var retValue = Math.round(velocity * 100) / 100;
-  if (retValue == 0.0) {
-    retValue = 0.01;
-  }
-  return retValue;
-}
-exports.velocity_KPI = velocity_KPI;
-},{"../timeline":13,"./throughput_progression":8,"assert":23,"underscore":21}],10:[function(require,module,exports){
-// The MIT License (MIT)
-//
-// Copyright (c) 2014 Etienne Rossignon
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
-var assert = require("assert");
-var _ = require("underscore");
-
-/**
- * given a series of ticket and a date , returns the work in progress
- *
- * @param tickets {Array<WorkItem>
- * @param date {Date}
- * @returns {Object|*}  a structure containing the number of proposed, planned, in progress, and done ticket at Date.
- */
-function calculate_wip(tickets, date) {
-
-    "use strict";
-
-    assert(_.isArray(tickets));
-    assert(date instanceof Date);
-
-    return tickets.reduce(function (pv, current_ticket /*, index, array*/) {
-
-        var status = current_ticket.find_status_at_date(date);
-
-        if (status === "unknown") {
-           // skip
-        } else if (status === "unplanned") {
-            pv.proposed += 1;
-        } else  if (status === "New") {
-            pv.planned += 1;
-        } else if (status === "In Progress") {
-            pv.in_progress += 1;
-        } else if (status === "Done") {
-            pv.done += 1;
-        } else {
-            throw new Error("Unknwon status " +  status);
-        }
-        return pv;
-    }, { date: date, proposed: 0, planned: 0, in_progress: 0, done: 0 });
-}
-exports.calculate_wip = calculate_wip;
-
-},{"assert":23,"underscore":21}],11:[function(require,module,exports){
-/*global require*/
-// The MIT License (MIT)
-//
-// Copyright (c) 2014 Etienne Rossignon
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
-/**
- *
- */
-
-var assert = require("assert");
-var _ = require('underscore');
-
-var WorkItem = require("./workitem").WorkItem;
-var tl = require('./timeline');
-var Today = require("./today").Today;
-
-
-var calculate_wip = require("./kanban_kpi/work_in_progress").calculate_wip;
-var throughput_progression = require("./kanban_kpi/throughput_progression").throughput_progression;
-var calculate_average_lead_time = require("./kanban_kpi/lead_time").calculate_average_lead_time;
-var lead_time_KPI =  require("./kanban_kpi/lead_time").lead_time_KPI;
-var velocity_KPI =require("./kanban_kpi/velocity").velocity_KPI;
-
-function is_one_of(value, array_of_values) {
-    return ( array_of_values.indexOf(value) > -1);
-}
-
-
-/**
- *
- * Providing a timeline array  ( array of date ) and a function that
- * takes a date as an argument and returns any arbitrary object of the
- * form { field1: <some value>, field2: <some value>, ...}
- * this function returns a object with can be easily handled
- * by most graph api and looks like this:
- *
- * {
- *   {  name: "field1", 
- *      type: "number",
- *      data: [ 0.123 , .... ,12340] // one data per date
- *   },
- *   {  name: "field1", 
- *      type: "number",
- *      data: [ 0.123 , .... ,12340] // some data value
- *   }
- * }
- *
- * functor must return a object with properties to vectorize
- */
-
-function produce_multi_array(timeline, functor) {
-    "use strict";
-
-    assert(_.isArray(timeline));
-    assert(_.isFunction(functor));
-
-    var res = {};
-    //  res.timeline = { name: 'timeline', type: 'date', data: timeline};
-    timeline.forEach(function (date) {
-        var obj = functor(date);
-        for (var property in obj) {
-            if (obj.hasOwnProperty(property)) {
-                if (!res[property]) {
-                    res[property] = {name: property, type: 'number', data: []};
-                }
-                res[property].data.push(obj[property]);
-            }
-        }
-    });
-    return res;
-}
-
-/**
- */
-function average_lead_time_progression(tickets, timeline, width) {
-    "use strict";
-    assert(timeline.constructor === Date || timeline.constructor === Array);
-    if (timeline.constructor === Date) {
-        return calculate_average_lead_time(tickets, timeline, width);
-    }
-    return produce_multi_array(timeline, function (date) {
-        return calculate_average_lead_time(tickets, date, width);
-    });
-}
-
-
-function average_wip_progression(tickets, timeline, width) {
-    "use strict";
-    var progression = produce_multi_array(timeline, function (date) {
-        return calculate_wip(tickets, date);
-    });
-
-    return timeline.map(function (date, i) {
-        return  progression.planned.data[i] + progression.in_progress.data[i];
-    });
-}
-
-function calculate_progression(tickets, timeline, width) {
-    "use strict";
-    return produce_multi_array(timeline, function (date) {
-        return calculate_wip(tickets, date);
-    });
-}
-
-
-
-
-/**
- *  calculate the statistics for a set of tickets
- */
-function statistics(tickets,options) {
-
-    options = options || {};
-
-    options.today       = new Date(options.today || Today());
-    options.eta_expected= new Date(options.eta_expected || Today());
-
-
-    function calculate_trend(old_value, new_value) {
-
-        var average = (old_value + new_value) / 2;
-        var diff = new_value - old_value;
-        var unsigned_diff = (diff < 0) ? -diff : diff;
-        var sign = (diff < 0) ? -1 : 1;
-        var variation = Math.round((new_value - old_value) / old_value * 1000) / 10;
-        return variation + "%";
-
-        if (unsigned_diff < 0.05 * average) return 0;
-        if (unsigned_diff < 0.10 * average) {
-            return sign * 1;
-        }
-        if (unsigned_diff < 0.20 * average) {
-            return sign * 2;
-        }
-        if (unsigned_diff < 0.30 * average) {
-            return sign * 3;
-        }
-        return " " + (4 * sign) + " " + average + " " + unsigned_diff;
-
-    }
-
-    var s = {};
-    s.nb_known_defects = 0;
-    s.nb_unplanned_defects = 0;
-    s.nb_new_defects = 0;
-    s.nb_in_progress_defects = 0;
-    s.nb_delivered_defects = 0;
-
-    s.nb_known_us = 0;
-    s.nb_unplanned_us = 0;
-    s.nb_new_us = 0;
-    s.nb_in_progress_us = 0;
-    s.nb_delivered_us = 0;
-
-    s.reference_date = options.today;
-
-
-    var defects = [];
-    var user_stories = [];
-
-    s.speedup_factor1 = 5.0;
-    s.speedup_factor2 = 2.0;
-
-    console.log(" reference date ".yellow, s.reference_date);
-
-    tickets.forEach(function (ticket) {
-
-        var status = ticket.find_status_at_date(s.reference_date);
-
-        if (is_one_of(ticket.type, ["U-S", "EVO"])) {
-
-
-            if (status !== "unknown") {
-
-                s.nb_known_us++;
-                user_stories.push(ticket);
-
-                if (status == "unplanned") {
-                    s.nb_unplanned_us++;
-                } else if (status === "Done") {
-                    s.nb_delivered_us++;
-                } else if (status === "In Progress") {
-                    s.nb_in_progress_us++;
-                } else if (status === "New") {
-                    s.nb_new_us++;
-                } else {
-                    throw new Error(" unexpected status " + status);
-                }
-            }
-        }
-        if (is_one_of(ticket.type, ["BUG", "QA"])) {
-
-
-            if (status !== "unknown") {
-
-                s.nb_known_defects++;
-                defects.push(ticket);
-
-                if (status == "unplanned") {
-                    s.nb_unplanned_defects++;
-                } else if (status === "Done") {
-                    s.nb_delivered_defects++;
-                } else if (status === "In Progress") {
-                    s.nb_in_progress_defects++;
-                } else if (status === "New") {
-                    s.nb_new_defects++;
-                } else {
-                    throw new Error(" unexpected status " + status);
-                }
-
-
-            }
-        }
-    });
-
-    // assert( user_stories.length === ( s.nb_unplanned_us + s.nb_delivered_us +  s.nb_in_progress_us + ));
-
-    s.ratio_defect_per_us = Math.round(s.nb_known_defects / s.nb_delivered_us * 100) / 100;
-
-    s.today = options.today;
-    s.lastMonth = s.today.removeBusinessDay(20);
-
-    s.velocity_defects            = velocity_KPI(defects, s.today);
-    s.velocity_defects_last_month = velocity_KPI(defects, s.lastMonth);
-
-    s.velocity_defects_trend      = calculate_trend(s.velocity_defects_last_month, s.velocity_defects);
-
-    s.velocity_us               = velocity_KPI(user_stories, s.today);
-    s.velocity_us_last_month    = velocity_KPI(user_stories, s.lastMonth);
-    s.velocity_us_trend = calculate_trend(s.velocity_us_last_month, s.velocity_us);
-
-
-    s.average_defects_lead_time = lead_time_KPI(defects, s.today);
-    s.average_defects_lead_time_last_month = lead_time_KPI(defects, s.lastMonth);
-    s.average_defects_lead_time_trend = calculate_trend(s.average_defects_lead_time_last_month,
-        s.average_defects_lead_time);
-
-    s.average_user_story_lead_time = lead_time_KPI(user_stories, s.today);
-    s.average_user_story_lead_time_last_month = lead_time_KPI(user_stories, s.lastMonth);
-    s.average_user_story_lead_time_trend = calculate_trend(s.average_user_story_lead_time_last_month,
-        s.average_user_story_lead_time);
-
-
-    // La date de fin du projet prévue du projet
-    s.eta_expected = options.eta_expected
-
-    // s.c = JSON.stringify(configuration);
-    // -----------------------------------------------------------------
-    s.forecast = function (nb_incoming_us) {
-
-        var f = {};
-        var s = this;
-        f.nb_incoming_us = nb_incoming_us;
-        f.nb_new_backlog_size = s.nb_new_us + nb_incoming_us;
-
-
-        // calculate the estimated number of bugs that will be generated with wip and planed us
-        f.coef1 = 1.00 * s.ratio_defect_per_us;    // probability for a in progress user story
-        // to generate new bugs that are unknown today
-
-        f.coef2 = 0.01 * s.ratio_defect_per_us;    // probability for a delivered user story
-        // to generate a new bug  that are unknown today
-
-        f.coef3 = 1.20 * s.ratio_defect_per_us;    // probability for a in progress user story
-        // to generate new bugs that are unknown today
-
-        f.assumed_in_progress_us_completion_ratio = 0.5;
-        f.assumed_in_progress_defect_completion_ratio = 0.5;
-        f.estimated_number_of_future_defects = Math.round(f.coef1 * s.nb_in_progress_us +
-            f.coef2 * s.nb_delivered_us +
-            f.coef3 * f.nb_new_backlog_size);
-
-
-        f.averaged_nb_defect_to_completion = (s.nb_in_progress_defects * f.assumed_in_progress_defect_completion_ratio +
-            s.nb_new_defects + f.estimated_number_of_future_defects );
-
-        f.nb_days_to_completion1 = Math.round(f.averaged_nb_defect_to_completion / s.velocity_defects);
-
-        f.nb_calendar_days_to_completion1 = Math.round(f.nb_days_to_completion1 * 7 / 5);
-
-        //
-        // in the first periods, user_stories and defects are processed at the same time and current velocities applies
-        // a very optimistic scenario is to consider that project will stop straight after the last US is finished
-        // in this case there will be no room left to finish up the defects
-        //
-        f.nb_days_to_completion2 = Math.round(
-                (s.nb_in_progress_us * f.assumed_in_progress_us_completion_ratio +
-                    f.nb_new_backlog_size ) / s.velocity_us);
-
-        f.nb_calendar_days_to_completion2 = Math.round(f.nb_days_to_completion2 * 7 / 5);
-        ;
-        // in reality there is a speed up of (2x to 5x) if the team only work on ano/evo
-        //
-        f.number_of_fixed_defect_during_mixed_period = Math.round(f.nb_days_to_completion2 * s.velocity_defects);
-
-        f.remaining_defect_during_fast_period = f.averaged_nb_defect_to_completion -
-            f.number_of_fixed_defect_during_mixed_period;
-
-        if (f.remaining_defect_during_fast_period < 10) {
-            f.remaining_defect_during_fast_period = 10;
-        }
-
-        f.number_of_days_to_fixed_remaining_defect_fast1 = Math.round(f.remaining_defect_during_fast_period / ( s.velocity_defects * s.speedup_factor1));
-        f.number_of_days_to_fixed_remaining_defect_fast2 = Math.round(f.remaining_defect_during_fast_period / ( s.velocity_defects * s.speedup_factor2));
-
-        var today = s.today;
-
-        f.eta_very_optimistic = today.addBusinessDay(f.nb_days_to_completion2);
-
-        f.eta_optimistic_with_one_month_stab = today.addBusinessDay(f.nb_days_to_completion2 + 31);
-
-
-        f.eta_probable = today.addBusinessDay(f.nb_days_to_completion2 + f.number_of_days_to_fixed_remaining_defect_fast1);
-
-
-        f.eta_pessimistic = today.addBusinessDay(f.nb_days_to_completion2 + f.number_of_days_to_fixed_remaining_defect_fast2);
-
-        f.delta_eta = tl.diffDate(s.eta_expected, f.eta_probable);
-
-        // based on probable
-        var b = tl.calculateNumberOfNonBusinessDays(today, f.nb_days_to_completion2 + f.number_of_days_to_fixed_remaining_defect_fast1);
-        f.non_business_days = ' ' + b.vacations + " / " + b.weekend + ' / ' + b.bridge;
-        return f;
-    }
-
-    console.log(" calculating statistics  : today        is ".yellow,options.today );
-    console.log(" calculating statistics  : eta_expected is ".yellow,options.eta_expected );
-    console.log(" calculating statistics  : last month was  ".yellow,s.lastMonth );
-
-    return s;
-}
-
-exports.statistics = statistics;
-exports.calculate_progression = calculate_progression;
-exports.average_lead_time_progression = average_lead_time_progression;
-exports.average_wip_progression = average_wip_progression;
-
-
-
-},{"./kanban_kpi/lead_time":7,"./kanban_kpi/throughput_progression":8,"./kanban_kpi/velocity":9,"./kanban_kpi/work_in_progress":10,"./timeline":13,"./today":14,"./workitem":16,"assert":23,"underscore":21}],12:[function(require,module,exports){
-// The MIT License (MIT)
-//
-// Copyright (c) 2014 Etienne Rossignon
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
-var assert = require("assert");
-var _ = require("underscore");
-var WorkItem = require("./workitem").WorkItem;
-var HashMap = require("./hashmap").HashMap;
-
-var serialize = require("serialijse").serialize;
-var deserialize = require("serialijse").deserialize;
-var declarePersistable = require("serialijse").declarePersistable;
-
-
-function Project(options) {
-    this._work_items = [];
-    this._index = {};
-
-    var self = this;
-    if (options && options.tickets) {
-        options.tickets.forEach(function (t) {
-            self.add_work_item(t);
-        });
-    }
-
-};
-
-Project.prototype.add_work_item = function (work_item) {
-    this._work_items.push(work_item);
-    this._index[work_item.id] = work_item;
-};
-
-Project.prototype.find_work_item = function (id) {
-    return this._index[id];
-};
-
-/**
- * @property nb_work_item {Integer}
- */
-Project.prototype.__defineGetter__("nb_work_items", function () {
-    return this._work_items.length;
-});
-
-var fs = require("fs");
-
-declarePersistable(Project);
-declarePersistable(WorkItem);
-declarePersistable(HashMap);
-
-
-Project.prototype.loadString = function (dataString, options,callback) {
-
-    if (_.isFunction(options) && !callback) {
-        callback = options;
-        options = {};
-    }
-    assert(_.isFunction(callback));
-
-    var self = this;
-
-    self._work_items = deserialize(dataString);
-    assert(_.isArray(self._work_items), " expecting an array here");
-
-    // rebuild index;
-    self._index = {}
-    self._work_items.forEach(function (work_item) {
-        self._index[work_item.id] = work_item;
-    });
-    callback(null);
-
-};
-
-Project.prototype.load = function (filename, callback) {
-
-    assert(_.isFunction(callback));
-
-    var self = this;
-
-    var f = fs.readFile(filename, function (err, serializationString) {
-
-        if (err) {
-            callback(err);
-            return;
-        }
-        serializationString = serializationString.toString();
-        self.loadString(serializationString,callback);
-
-    });
-};
-
-Project.prototype.saveString = function (callback) {
-    assert(_.isFunction(callback));
-    var self = this;
-    var serializationString = serialize(self._work_items);
-    callback(null,serializationString);
-};
-
-Project.prototype.save = function (filename, callback) {
-
-    assert(_.isFunction(callback));
-    var self = this;
-    self.saveString(function(err,serializationString){
-        var f = fs.writeFile(filename, serializationString, function (err) {
-            callback(err);
-        });
-    });
-};
-
-
-Project.prototype.__defineGetter__("use_cases",function(){
-    var self = this;
-    return self._work_items.filter(function(wi){ return wi.type === "U-C"; });
-});
-
-Project.prototype.__defineGetter__("top_level_use_cases",function(){
-    var self = this;
-    return self._work_items.filter(function(wi){ return wi.type === "U-C" && wi.parent_id === "noparent"; });
-});
-
-Project.prototype.__defineGetter__("user_stories",function(){
-    var self = this;
-    return self._work_items.filter(function(wi){ return wi.type === "U-S"; });
-});
-
-Project.prototype.__defineGetter__("defects",function(){
-    var self = this;
-    return self._work_items.filter(function(wi){ return wi.type === "BUG"; });
-});
-
-var get_start_date = require("./workitem_utils").get_start_date;
-Project.prototype.__defineGetter__("startDate",function(){
-    var self = this;
-    return get_start_date(self._work_items);
-});
-
-var get_last_updated_date = require("./workitem_utils").get_last_updated_date;
-Project.prototype.__defineGetter__("lastUpdatedDate",function(){
-    var self = this;
-    return get_last_updated_date(self._work_items);
-});
-
-exports.Project = Project;
-
-},{"./hashmap":4,"./workitem":16,"./workitem_utils":17,"assert":23,"fs":22,"serialijse":18,"underscore":21}],13:[function(require,module,exports){
-// The MIT License (MIT)
-//
-// Copyright (c) 2014 Etienne Rossignon
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
-/**
- *  @module Timeline : Module to deal with a Kanban Timeline
- */
-
-var assert = require ('assert');
-
-var Today = require("./today").Today;
-
-
-function _weekday(date) {
-  "use strict";
-  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][date.getDay()];
-}
-
-/**
- * @class Date
- * @method weekday
- * @return {String} the three first letters of the week day (in english)
- */
-Date.prototype.weekday = function()
-{
-    return _weekday(this);  
-}
-
-/**
- *  find the date working days ago in the past from
- *  ( excluding week-end , but not vacation )
- *
- */
-function _working_days_ago(d,working_day_ago, optional_hour_shift) {
-  "use strict";
-  var r = working_day_ago % 5;
-  var w = Math.round( (working_day_ago-r) / 5 );
-  var a = w*7+r;
-
-  optional_hour_shift = (optional_hour_shift ? optional_hour_shift : 0);
-  
-  var nd = new Date(d.getFullYear(), 
-                    d.getMonth(),
-                    d.getDate() - a,
-                    d.getHours() + optional_hour_shift,
-                    d.getMinutes() + 0);
-
-  return nd;
-}
-/**
- * @class Date
- * @method working_days_ago
- * @param working_days_ago {Integer} the number of working day in the past
- * @param optional_hour_shift
- * @return {Date} return a date in the past  matching the number of working days ago
- */
-Date.prototype.working_days_ago = function (working_days_ago,optional_hour_shift){
-   return _working_days_ago(this,working_days_ago,optional_hour_shift);
-};
-
-
-/**
- * @class Date
- * @param calendar_days
- * @param optional_hour_shift
- * @returns {Date}
- */
-Date.prototype.next_day = function(calendar_days,optional_hour_shift) 
-{
-   calendar_days = calendar_days ? calendar_days : 1;
-   optional_hour_shift = (optional_hour_shift  ? optional_hour_shift : 0);
-
-   var d = new Date(this.getFullYear() , 
-                    this.getMonth(), 
-                    this.getDate(),
-                    this.getHours() + optional_hour_shift, 
-                    this.getMinutes() );
-   d.setDate(d.getDate()+ calendar_days);
-   return d;
-};
-
-Date.prototype.days_ago = function(calendar_days,optional_hour_shift)
-{
-   calendar_days = calendar_days ? calendar_days : 1;
-   return this.next_day(-calendar_days,optional_hour_shift)
-};
-
-// exports.days_ago = _days_ago;
-exports.weekday = _weekday;
-
-
-// from http://snipplr.com/view/4086/
-function calcBusinessDays_old(dDate1, dDate2) { // input given as Date objects
-
-    "use strict";
-    // turn date to dates
-    if (typeof dDate1 === "string" ) {
-        dDate1 = new Date(dDate1);
-    } 
-    if ( typeof dDate2 === "string") {
-        dDate2 = new Date(dDate2);
-    }
-    var iWeeks, iDateDiff, iAdjust = 0;
-
-    if (dDate2 < dDate1) return - calcBusinessDays(dDate2,dDate1); // error code if dates transposed
-
-    var iWeekday1 = dDate1.getDay(); // day of week
-    var iWeekday2 = dDate2.getDay();
-
-    iWeekday1 = (iWeekday1 === 0) ? 7 : iWeekday1; // change Sunday from 0 to 7
-    iWeekday2 = (iWeekday2 === 0) ? 7 : iWeekday2;
-
-    if ((iWeekday1 > 5) && (iWeekday2 > 5)) iAdjust = 1; // adjustment if both days on weekend
-
-    iWeekday1 = (iWeekday1 > 5) ? 5 : iWeekday1; // only count weekdays
-    iWeekday2 = (iWeekday2 > 5) ? 5 : iWeekday2;
-
-    // calculate differnece in weeks (1000mS * 60sec * 60min * 24hrs * 7 days = 604800000)
-    iWeeks = Math.floor((dDate2.getTime() - dDate1.getTime()) / 604800000);
-
-    if (iWeekday1 <= iWeekday2) {
-        iDateDiff = (iWeeks * 5) + (iWeekday2 - iWeekday1)
-    } else {
-        iDateDiff = ((iWeeks + 1) * 5) - (iWeekday1 - iWeekday2)
-    }
-
-    iDateDiff -= iAdjust; // take into account both days on weekend
-
-    return (iDateDiff + 1); // add 1 because dates are inclusive
-
-}
-
-// from http://snipplr.com/view/4086/
-function calcBusinessDays(dDate1, dDate2) { // input given as Date objects
-
-    "use strict";
-    // turn date to dates
-    if (typeof dDate1 === "string" ) {
-        dDate1 = new Date(dDate1);
-    } 
-    if ( typeof dDate2 === "string") {
-        dDate2 = new Date(dDate2);
-    }
-    if (dDate2 < dDate1) {
-       // negative duration if dDate2 < dDate1
- 	     return - calcBusinessDays(dDate2,dDate1); 
-    }
-
-    var nbWorkingDay = 0;
-    var date = new Date(dDate1);
-
-    while (date <= dDate2) {
-       if ( date.isWorkingDay() ) { 
-         nbWorkingDay +=1;
-       }
-       date.setDate(date.getDate()+1);
-   }
-   return nbWorkingDay;
-}
-
-
-function VacationTable()
-{
-    this._recurrent_vacation_date={};
-}
-
-/**
- * @method add_recurrent_vacation_day
- * @param description {String}
- * @param day_in_month {Integer} 1-31
- * @param month 1-12
- */
-VacationTable.prototype.add_recurrent_vacation_day = function(description, day_in_month,month) {
-    assert(day_in_month >= 1 && day_in_month <= 31);
-    assert(month >= 1 && month <= 12);
-
-    this._recurrent_vacation_date[month*100+day_in_month] = "description";
-
-};
-VacationTable.prototype.isVacation = function(date) {
-
-    // var year  = date.getFullYear();
-    var dow   = date.getDay(); // 0-6 0 Sunday, 6 Saturday
-    var month = date.getMonth()+1 ; // 1= Jan => 12 Dec
-    var day   = date.getDate(); // 1 -31
-
-    return this._recurrent_vacation_date.hasOwnProperty(month*100+day);
-};
-exports.VacationTable = VacationTable;
-
-
-function build_french_vacation_manager(){
-    var vm = new VacationTable();
-    vm.add_recurrent_vacation_day("1st of Jan"     ,1,1);
-    vm.add_recurrent_vacation_day("Fête du travail",1,5);
-    vm.add_recurrent_vacation_day("8 Mai"          ,8,5);
-    vm.add_recurrent_vacation_day("14 Juillet"     ,14,7);
-    vm.add_recurrent_vacation_day("15 Aout"        ,15,8);
-    vm.add_recurrent_vacation_day("11 Novembre"    ,11,11);
-    vm.add_recurrent_vacation_day("Christmas"      ,25,12);
-    vm.add_recurrent_vacation_day("Boxing day"     ,26,12);
-    vm.add_recurrent_vacation_day("31 décembre"    ,31,12);
-
-
-    vm.add_recurrent_vacation_day(" End of July"   ,20,7);
-    vm.add_recurrent_vacation_day(" End of July"   ,21,7);
-    vm.add_recurrent_vacation_day(" End of July"   ,22,7);
-    vm.add_recurrent_vacation_day(" End of July"   ,23,7);
-    vm.add_recurrent_vacation_day(" End of July"   ,24,7);
-    vm.add_recurrent_vacation_day(" End of July"   ,25,7);
-    vm.add_recurrent_vacation_day(" End of July"   ,26,7);
-    vm.add_recurrent_vacation_day(" End of July"   ,27,7);
-    vm.add_recurrent_vacation_day(" End of July"   ,28,7);
-    vm.add_recurrent_vacation_day(" End of July"   ,29,7);
-    vm.add_recurrent_vacation_day(" End of July"   ,30,7);
-    vm.add_recurrent_vacation_day(" End of July"   ,31,7);
-
-    vm.add_recurrent_vacation_day(" August"        ,1,8);
-    vm.add_recurrent_vacation_day(" August"        ,2,8);
-    vm.add_recurrent_vacation_day(" August"        ,3,8);
-    vm.add_recurrent_vacation_day(" August"        ,4,8);
-    vm.add_recurrent_vacation_day(" August"        ,5,8);
-    vm.add_recurrent_vacation_day(" August"        ,6,8);
-    vm.add_recurrent_vacation_day(" August"        ,7,8);
-    vm.add_recurrent_vacation_day(" August"        ,8,8);
-    vm.add_recurrent_vacation_day(" August"        ,9,8);
-    vm.add_recurrent_vacation_day(" August"        ,10,8);
-    vm.add_recurrent_vacation_day(" August"        ,11,8);
-    vm.add_recurrent_vacation_day(" August"        ,12,8);
-    vm.add_recurrent_vacation_day(" August"        ,13,8);
-    vm.add_recurrent_vacation_day(" August"        ,14,8);
-
-    return vm;
-}
-
-
-var default_vacationTable = build_french_vacation_manager();
-exports.installVacationManager =function(vm) {
-    var old_vacationTable = default_vacationTable;
-   // assert(vm instanceof VacationTable);
-    default_vacationTable = vm;
-    return old_vacationTable;
-};
-
-if (this._recurrent_vacation_date)
-
-function _isWeekEnd(date) {
-    var dow = date.getDay(); // 0-6 0 Sunday, 6 Saturday
-    return (dow===0) || (dow===6);
-}
-
-VacationTable.prototype.isBridgeDay = function(date)
-{
-    // this is not a week end date
-    if (_isWeekEnd(date))   return false;
-    if (this.isVacation(date))  return false;
-    var yesterday = date.days_ago(1);
-    var tomorrow  = date.next_day(1);
-//    var day_before_yestarday = date.days_ago(2);
-//    var day_after_tomorrow  = date.next_day(2);
-  
-    if (this.isVacation(yesterday)  && _isWeekEnd(tomorrow))
-         return true;
-    if (this.isVacation(tomorrow)   && _isWeekEnd(yesterday) )
-         return true; // for instance    Sun - Mon - Thu
-    return false;
-}
-
-VacationTable.prototype.isWorkingDay = function(date)
-{
-  if (_isWeekEnd(date))       { return false;}
-  if (this.isVacation(date))  { return false;}
-  if (this.isBridgeDay(date)) { return false;}
-  return true;
-};
-
-
-
-Date.prototype.isWeekEnd       = function()  { return _isWeekEnd(this);    }
-Date.prototype.isBridge        = function()  { return default_vacationTable.isBridgeDay(this);  }
-Date.prototype.isWorkingDay    = function()  { return default_vacationTable.isWorkingDay(this); }
-Date.prototype.isVacation      = function()  { return default_vacationTable.isVacation(this);   }
-
-//xx Date.prototype.isNonWorkingDay = function()  { return !_isWorkingDay(this); }
-
-function calculateNumberOfNonBusinessDays(startDate, numBusinessDays) {
-     // thanks stack overflow!
-     // http://stackoverflow.com/questions/1534804/how-can-i-add-business-days-to-the-current-date-in-java
-     // console.log(" startDate =", startDate," nbBusiness Days = ",  numBusinessDays) ;
-    var cal       = new Date(startDate);
-    var weekend   = 0;
-    var vacations = 0;
-    var bridge    = 0;
-
-    if (numBusinessDays === 0 ) { 
-        var res =  { 'weekend':weekend, 'vacations': vacations , 'bridge':bridge , 'end_date': cal};
-        return res;
-    }
-
-    function creep() {
-       while(!cal.isWorkingDay()) {
-         
-          if (cal.isWeekEnd()) {
-            weekend+=1;
-          } else if (cal.isBridge() ) {
-            bridge +=1;
-          } else if (cal.isVacation()) {
-            vacations +=1;
-          } 
-          cal = cal.next_day(1);
-       }
-       assert(cal.isWorkingDay(), " Creep " + cal + "should be working day");
-    }
-
-    creep(); // move to next working day or stay at current date
-    assert(cal.isWorkingDay(), cal + "should be working day");
-
-    for(var i = 0; i <numBusinessDays-1; i++) {
-       cal = cal.next_day(1);  // move to tommorow
-       creep(cal); // .. and creep to next working day
-    }
-    var res =  { 'weekend':weekend, 'vacations': vacations , 'bridge':bridge , 'end_date': cal};
-//    console.log(JSON.stringify(res));
-    assert( cal.isWorkingDay(), " cal " + cal + " Should be a working day ("+numBusinessDays+")"+JSON.stringify(res));
-    return res;
-
-  }
-
-
-
-/**
- * Calculates the number of calendar days
- * between two dates
- */
-function diffDate (d1,d2 ) {
-
-    d1 = new Date(d1);
-    d2 = new Date(d2);
-
-    // remove the time portion, set the dates to midnight
-    // d1.setHours(0,0,0,0);
-    // d2.setHours(0,0,0,0);
-
-    var diff = Math.ceil((d2 - d1) / 86400000) + 1;
-    return diff;
-}
-
-/**
- *  calculate the date which is nb_business_day
- *  after the refDate
- *  this method takes into account weekend , vacations and bridges
- */
-function _addBusinessDay(refDate,nb_business_day) {
-
-    var b = calculateNumberOfNonBusinessDays(refDate,nb_business_day);
-
-    var d1 = refDate.next_day(nb_business_day+ b.weekend + b.vacations + b.bridge-1);
-
-    return d1;
-}
-
-Date.prototype.addBusinessDay = function(nb_business_day) {
-
-   return _addBusinessDay(this,nb_business_day);
-};
-
-Date.prototype.removeBusinessDay = function(nb_business_day) {
-  
-   var d  = new Date(this);
-   for (var i=0;i<nb_business_day;i++) {
-     while (!d.isWorkingDay()) {
-      	d = d.days_ago(1);
-     }
-     d = d.days_ago(1);
-   }
-   while (!d.isWorkingDay()) {
-      	d = d.days_ago(1);
-   }
-   return d;
-};
-
-
-function build_time_line_raw(startDate,endDate) {
-    "use strict";
-    var timeline = [];
-
-    if (!endDate) endDate = Today(); // TODAY
-
-    for (var i = 0; i < 220; i++) {
-        var d = new Date(startDate);
-        d.setDate(d.getDate() + i);
-        // avoid week ends
-        if (d.getDay() >= 1 && d.getDay() <= 5) {
-            timeline.push(new Date(d));
-        }
-        if (d >= endDate) break;
-    }
-    return timeline;
-}
-
-
-/**
- * @method  build_time_line
- * @param   startDate {Date}
- * @param   startDate {endDate}
- * @return {Array<Date>}
- * create a time line starting at startDate or next closest working day if startDate is  not a working date
- * and excluding vacations and week-ends
- */
-function build_time_line(startDate,endDate) {
-    "use strict";
-    var timeline = [];
-
-    endDate =new Date( endDate || Today());
-
-    var current_date = new Date(startDate);
-    if (endDate.getTime() < current_date.getTime()) {
-        throw new Error("Invalid endDate < startDate in build_time_line endDate=" + endDate + " startDate=" + startDate);
-    }
-    // find first working day preceding startDate
-    // if start date is not a working day
-    while(!current_date.isWorkingDay()) {
-        current_date = current_date.days_ago(1);
-    }
-
-    for (var i = 0; i<=1001 ; i++) {
-        if (i>=1000) { throw new Error("Timeline too large !!!"); }
-        // avoid week ends
-        if (current_date.isWorkingDay()) {
-            timeline.push(current_date);
-        }
-        current_date = current_date.next_day(1);
-        if (current_date.getTime() > endDate.getTime()) break;
-    }
-    return timeline;
-}
-
-
-
-
-exports.calcBusinessDays = calcBusinessDays;
-exports.calculateNumberOfNonBusinessDays = calculateNumberOfNonBusinessDays
-exports.diffDate         = diffDate;
-exports.build_time_line  = build_time_line;   
-
-},{"./today":14,"assert":23}],14:[function(require,module,exports){
-/**
- * @method  Today
- * mockable method returning Today's date
- * @returns {Date}
- * @constructor
- */
-
-var _today = new Date();
-function Today() {
-  return _today;
-}
-Today.set = function(date) {
-  _today = new Date(date);
-}
-exports.Today = Today;
-
-},{}],15:[function(require,module,exports){
-// The MIT License (MIT)
-//
-// Copyright (c) 2014 Etienne Rossignon
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
-function ellipsys(str, maxl) {
-  "use strict";
-  if (!str) {
-    return " UNDEFINED ....";
-  }
-  if (str.length <= maxl) {
-    return str;
-  }
-  return str.substring(0, maxl) + "...";
-}
-
-
-function dateToYMD(date) {
-  "use strict"
-  var d = date.getDate();
-  var m = date.getMonth()+1;
-  var y = date.getFullYear();
-  return '' + y +'-'+ (m<=9?'0'+m:m) +'-'+ (d<=9?'0'+d:d);
-}
-
-exports.ellipsys = ellipsys;
-exports.dateToYMD = dateToYMD;
-},{}],16:[function(require,module,exports){
-// The MIT License (MIT)
-//
-// Copyright (c) 2014 Etienne Rossignon
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-/**
- * @module RedminKanban
- *
- * WorkItem
- * A WorkItem is an element used for kanban statistics,
- * it could either be a "user story",  a "use case" or a "defect"
- * A workitem holds a history of status changes
- *
- */
-var assert = require("assert");
-
-var HashMap = require("./hashmap").HashMap;
-var tl = require('./timeline');
-var Today = require("./today").Today;
-
-/**
- * @class WorkItem
- * @param options
- * @param options.id            {Integer} - the work item identification number.
- * @param options.subject       {String}  - the title string of the work item.
- * @param options.type          {String}  - the type of work item.
- * @param options.created_on    {Date}    - the work item creation date.
- * @param options.fixed_version {String}  - the name of the version in which the work item has been fixed/assigned.
- * @param options.priority      {Integer} - the work item priority - higher number means higher priority.
- * @param options.complexity    {String}  - the work item complexity.
- * @param options.projet        {String}  - the name of the project the work item has been assigned to.
- * @constructor
- */
-function WorkItem(options) {
-
-    options = options || {};
-
-    this.current_status = "New";
-
-    this.relations = [];
-    this.blocked_by = [];
-    this.children = [];
-    this.defects = [];
-    this.type = "U-S"; // user story
-    this.fixed_version = "SomeVersion";
-    this.journal = [];
-
-    if (typeof options === typeof {}) {
-        var fields = {
-            "id": "[0-9]+",
-            "relations":"",
-            "blocked_by":"" ,
-            "user_stories":"",
-            "defects":"",
-            "journal":"",
-            "parent_id":"",
-            "done_ratio":"",
-            "subject": "\w",
-            "type": "(U-S|U-C|BUG|EVO|QA)",
-            "created_on": "DATE",
-            "updated_on": "DATE",
-            "fixed_version": "IDENT",
-            "priority": "NUMBER",
-            "complexity": "(S|M|L|XL|XXL)",
-            "current_status": "Done|In Progress|New",
-            "project": "STRING"
-        };
-        var me = this;
-        Object.keys(options).forEach(function (field) {
-            if (!fields.hasOwnProperty(field)) {
-                console.log(options);
-                throw new Error("invalid options set : " + field);
-            }
-            // TODO : make some type checking and asserts
-            me[field] = options[field];
-        });
-    }
-
-    this.created_on = options.created_on ? new Date(options.created_on) : Today();
-
-    this.updated_on = ( options.updated_on) ? options.updated_on: this.created_on;
-
-    var _cur_status = this.current_status;
-    this.current_status = "undefined";
-    this.set_status(this.created_on, _cur_status);
-    assert(this.created_on.toString() === this.updated_on.toString());
-    if (this.parent_id === null ) {
-        this.parent_id = "noparent";
-    }
-}
-
-
-WorkItem.prototype.__defineGetter__("unplanned",function() {
-    return !this.fixed_version || this.fixed_version === "unplanned";
-});
-
-WorkItem.prototype.__defineGetter__("user_stories",function() {
-    return this.children.filter(function(workitem){ return workitem.type === "U-S"; });
-});
-
-WorkItem.prototype.__defineGetter__("use_cases",function() {
-    return this.children.filter(function(workitem){ return workitem.type === "U-C"; });
-});
-
-//WorkItem.createFromJSON = function(jsonObj) {
-//
-//    var work_item = new WorkItem();
-//    Object.keys(jsonObj).forEach(function (field) { work_item[field] = jsonObj[field]; });
-//    return work_item;
-//}
-
-/**
- *  calculate the consolidated percent done
- *  from  a collection of work item
- */
-function consolidated_percent_done(collection) {
-    "use strict";
-    var nb_el = 0;
-    var total = 0;
-
-    if (!collection) return 0;
-    if (collection.length === 0) return 0;
-
-    collection.forEach(function (workitem) {
-
-        if (workitem.unplanned) {
-            // ignore unplanned element
-            return;
-        }
-        total += workitem.percent_done();
-        nb_el += 1;
-    });
-    if (nb_el === 0) return 0;
-    return Math.round(total / nb_el);
-}
-
-exports.private = {};
-exports.private.consolidated_percent_done = consolidated_percent_done;
-
-function get_adjusted_raw_done_ratio(workitem) {
-    if (!workitem)  {
-      return 0;
-    }
-    if (workitem.current_status === "Done") {
-      return 100;
-    }
-    if (!workitem.done_ratio) {
-      return 0;
-    }
-    return  workitem.done_ratio;
-}
-
-WorkItem.prototype.is_in_progress = function () {
-
-    if (this.current_status === "In Progress") {
-      return true;
-    }
-    var done_ratio = get_adjusted_raw_done_ratio(this);
-
-   if (done_ratio > 0 && done_ratio < 100) {
-      return true;
-    }
-
-    return false;
-};
-
-WorkItem.prototype.is_done = function () {
-    "use strict";
-    return this.percent_done() > 99.999;
-};
-
-WorkItem.prototype.adjust_done_ratio = function () {
-    this.done_ratio = get_adjusted_raw_done_ratio(this);
-};
-
-
-WorkItem.prototype.percent_done = function () {
-
-    "use strict";
-
-    if (this.type === "U-C") {
-        if (this.children.length === 0) {
-            return 0.0;
-        }
-        var p_us =  consolidated_percent_done(this.children);
-        var p_ano = consolidated_percent_done(this.defects);
-        var n_us =  this.children.length;
-        var n_ano = this.defects.length;
-        if (n_us + n_ano === 0) return 0;
-        //xx console.warn(" ---------------- [ ", p_us, p_ano, n_us, n_ano)
-        return Math.round((p_us * 80 * n_us + p_ano * 20 * n_ano) / (n_us * 80 + n_ano * 20));
-
-    }
-    if (this.type === "U-S") {
-
-        return get_adjusted_raw_done_ratio(this);
-
-        var p_us = get_adjusted_raw_done_ratio(this);
-        var p_ano = consolidated_percent_done(this.defects);
-
-        var n_us = 1;
-        var n_ano = this.defects.size();
-        // console.warn(" ---------------- [ ", p_us,p_ano,n_us,n_ano)
-        return Math.round((p_us * 80 * n_us + p_ano * 20 * n_ano) / (100 * (n_us + n_ano)));
-
-    } else {
-        return get_adjusted_raw_done_ratio(this);
-    }
-};
-
-/**
- * @method set_status
- * @param date   {Date}
- * @param status {String}
- */
-WorkItem.prototype.set_status = function (date, status) {
-
-    assert(date);
-    assert(date >= this.updated_on);
-
-    this.journal.push({
-        date: date,
-        old_value: this.current_status,
-        new_value: status
-    });
-
-    this.updated_on = date;
-    this.current_status = status;
-};
-
-
-WorkItem.prototype.find_status_at_date = function (ref_date) {
-
-    "use strict";
-
-    if (ref_date < this.created_on) {
-        return "unknown";
-    }
-    if (!this.journal) {
-        return "unknown";
-    }
-    if (this.unplanned) {
-        return "unplanned"
-    }
-    for (var i = 0; i < this.journal.length; i++) {
-        var entry = this.journal[i];
-        if (entry.date > ref_date) {
-            return entry.old_value;
-        }
-    }
-    return this.current_status;
-};
-
-
-/**
- *  find_starting_date
- *  returns the date at which the work item went from
- *  new to In Progress or Done.
- */
-WorkItem.prototype.find_starting_date = function () {
-    for (var i = 0; i < this.journal.length; i++) {
-        var s = this.journal[i].new_value;
-        if (s === "In Progress" || s === "Done") {
-            return this.journal[i].date;
-        }
-    }
-    return undefined;
-};
-/**
- *  find_completion_date
- *  returns the date at which the work item went from
- *  In Progress to "Done"
- */
-WorkItem.prototype.find_completion_date = function () {
-   //TODO
-    for (var i = 0; i < this.journal.length; i++) {
-        var s = this.journal[i].new_value;
-        if (s === "Done") {
-            return this.journal[i].date;
-        }
-    }
-    return undefined;
-};
-
-/**
- * calculate_lead_time:
- * calculates the duration between the first "In Progress"
- * to the last "Done"
- *
- *  - If the item is still in progress at ref_date, the algorithm
- *    assumes arbitrarilly that 2 more days will be required to
- *    get to "Done".
- *  - If wip_flag is set the calculation of the lead time
- *    starts from the starting_date, otherwise from the creation date
- *
- */
-WorkItem.prototype.calculate_lead_time = function (ref_date, wip_flag) {
-
-    "use strict";
-    var ticket = this;
-    wip_flag = ( wip_flag == undefined) ? false : true;
-
-    if (!ticket.is_done() && !ticket.is_in_progress()) {
-        // lead time is undefined
-        return undefined;
-    }
-    if (typeof ref_date === "undefined") {
-        ref_date = Today(); // today
-    }
-
-    var startDate = ticket.created_on;
-    if (wip_flag) startDate = ticket.find_starting_date();
-    if (startDate === undefined) {
-        return undefined;
-    }
-    if (ref_date <= startDate) {
-        return 0;
-    }
-    if (ticket.journal.length === 0) {
-        return 1; // was created as closed
-    }
-
-    //var endDate = new Date(ref_date); // today as ref_date
-    //xx var endDate = Today();
-    var now = new Date(ref_date);
-    var endDate = now;
-
-    var status = this.find_status_at_date(now);
-
-    if (status !== "Done") {
-        // add arbitrarily 2 working days
-        endDate = now.addBusinessDay(2);
-        //   return undefined; // cannot be used to calculate lead time
-    } else {
-        // find last date
-        var a = ticket.journal[ticket.journal.length - 1];
-        //xx assert(a.new_value === "Done");
-        endDate = a.date;
-    }
-
-    var diffDay = tl.calcBusinessDays(startDate, endDate);
-    var lead_time = diffDay;
-    return lead_time;
-
-};
-
-
-function _progress_bar(ticket, timeline) {
-    "use strict";
-    var ret = "";
-    if (ticket.id === 133) {
-        //xx console.log("xxxxx ",ticket);
-    }
-    var found_done  = false;
-    for (var t in timeline) {
-        var d = timeline[t];
-        var s = ticket.find_status_at_date(d);
-        if (s === undefined) {
-            ret = ret + "?"
-        } else {
-            var c = s.substring(0, 1);
-            c  = (s === 'unknown' ) ? '.' : c;
-            if ( c === 'D') {
-                if (found_done) {
-                    c = '.';
-                } else {
-                    found_done = true;
-                }
-            } else {
-                found_done =false;
-            }
-            ret = ret + c
-        }
-    }
-    return ret;
-}
-
-WorkItem.prototype.progress_bar = function (timeline) {
-    return _progress_bar(this, timeline);
-};
-
-
-
-function sort_work_item_map(map) {
-  "use strict";
-  function compare_string(a, b) {
-    return a.localeCompare(b);
-  }
-
-  function compare_number(a, b) {
-    if (a < b) return -1;
-    if (a > b) return 1;
-    return 0;
-  }
-
-  function compare_us(e1, e2) {
-//    return compare_string(e1.fixed_version,e2.fixed_version);
-    if (e1.current_status === "Done" && e2.current_status !== "Done") return -1;
-    if (e2.current_status === "Done" && e1.current_status !== "Done") return 1;
-
-    if (e1.unplanned && !e2.unplanned) {
-      return   1;
-    }
-    if (!e1.unplanned && e2.unplanned) {
-      return  -1;
-    }
-    if (e1.unplanned && e2.unplanned) {
-      // both issues are unplanned, we don't care about the order
-      return 0;
-    }
-
-    var v = compare_string(e1.fixed_version, e2.fixed_version);
-    if (v !== 0) return v;
-
-//    var v2 = compare_number(get_adjusted_raw_done_ratio(e1),get_adjusted_raw_done_ratio(e2));
-//    if(v2!==0) return v2;
-
-
-    var v3 = compare_number(e2.percent_done(), e1.percent_done());
-    if (v3 !== 0) return v3;
-    var v4 = compare_string(e1.current_status, e2.current_status);
-    if (v4 !== 0) return v4;
-    return v4;
-  }
-
-  var array = [];
-  map.forEach(function (us) {
-    array.push(us);
-  });
-
-  array = array.sort(compare_us);
-  return array;
-}
-
-WorkItem.prototype.sort_user_stories = function () {
-  return sort_work_item_map(this.children);
-}
-
-WorkItem.prototype.sort_defects = function () {
-  return sort_work_item_map(this.defects);
-}
-exports.WorkItem = WorkItem;
-
-
-},{"./hashmap":4,"./timeline":13,"./today":14,"assert":23}],17:[function(require,module,exports){
-// The MIT License (MIT)
-//
-// Copyright (c) 2014 Etienne Rossignon
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
-var assert = require("assert");
-
-function get_projet_names(tickets) {
-    var projects = {};
-    tickets.forEach(function (ticket) {
-        projects[ticket.project] = "a";
-    });
-    return Object.keys(projects);
-}
-
-
-function search(tickets, get_value, comp_func) {
-    if (tickets.length === 0) {
-        return null;
-    }
-    assert(tickets.length > 0);
-    return tickets
-        .map(get_value)
-        .reduce(function (previousValue, currentValue, index, array) {
-            return comp_func(currentValue, previousValue) ? currentValue : previousValue;
-        }, get_value(tickets[0]));
-}
-
-function get_last_updated_date(tickets) {
-    function ref_date(ticket) {
-        return new Date(ticket.updated_on);
-    };
-    function comp(currentDate, previousDate) {
-        return currentDate.getTime() > previousDate.getTime();
-    }
-
-    return search(tickets, ref_date, comp);
-}
-
-function get_start_date(tickets) {
-    function ref_date(ticket) {
-        return new Date(ticket.created_on);
-    };
-    function comp(currentDate, previousDate) {
-        return currentDate.getTime() < previousDate.getTime();
-    }
-
-    return search(tickets, ref_date, comp);
-}
-exports.get_start_date = get_start_date;
-exports.get_projet_names = get_projet_names;
-exports.get_last_updated_date = get_last_updated_date;
-
-},{"assert":23}],18:[function(require,module,exports){
-/*global exports,require*/
-var lib = require("./lib/serialijse");
-exports.serialize = lib.serialize;
-exports.deserialize = lib.deserialize;
-exports.serializeZ = lib.serializeZ;
-exports.deserializeZ = lib.deserializeZ;
-exports.declarePersistable = lib.declarePersistable;
-
-},{"./lib/serialijse":19}],19:[function(require,module,exports){
-/*global module*/
-(function () {
-    "use strict";
-    var assert = require("assert"),
-        _ = require("underscore");
-
-    var g_global = {};
-
-    function declarePersistable(constructor) {
-        var className = constructor.prototype.constructor.name;
-        if (g_global.hasOwnProperty(className)) {
-            console.warn("warning: declarePersistable : class " + className + " already registered");
-        }
-        //xx assert(!g_global.hasOwnProperty(className));
-        g_global[className] = constructor;
-    }
-
-
-    function serialize(object) {
-
-        assert(object !== undefined,"serialize: expect a valid object to serialize ");
-
-        var index = [];
-        var objects = [];
-
-        function add_object_in_index(obj, serializing_data) {
-            var id = index.length;
-            obj.____index = id;
-            index.push(serializing_data);
-            objects.push(obj);
-
-            return id;
-        }
-
-        function find_object(obj) {
-            if (obj.____index !== undefined) {
-                assert(objects[obj.____index] === obj);
-                return obj.____index;
-            }
-            return -1;
-        }
-
-        function _serialize_object(serializingObject, object) {
-
-            assert(object !== undefined);
-
-
-            var className = object.constructor.name, s, v, id;
-
-            // j => json object to follow
-            // d => date
-            // a => array
-            // o => class  { c: className d: data }
-            // @ => already serialized object
-
-            if (className === "Array") {
-                serializingObject["a"] = object.map(_serialize);
-                return;
-            }
-            if (className === "Date") {
-                serializingObject["d"] = object.getTime();
-                return;
-            }
-            if (className !== "Object" && !g_global.hasOwnProperty(className) ) {
-                throw new Error("class " + className + " is not registered in class Factory - deserialization will not be possible");
-            }
-
-            // check if the object has already been serialized
-            id = find_object(object);
-
-            if (id === -1) { // not found
-                // object hasn't yet been serialized
-                s = {
-                    c: className,
-                    d: {}
-                };
-
-                id = add_object_in_index(object, s);
-
-                for (v in object) {
-                    if (object.hasOwnProperty(v) && v !== '____index') {
-                        if (object[v] !== null) {
-                            s.d[v] = _serialize(object[v]);
-                        }
-                    }
-                }
-            }
-            serializingObject.o = id;
-            return serializingObject;
-        }
-
-        function _serialize(object) {
-
-            if (object === undefined) {
-                return undefined;
-            }
-
-            var serializingObject = {};
-
-            switch (typeof object) {
-                case 'number':
-                case 'boolean':
-                case 'string':
-                    // basic type
-                    return object;
-                case 'object':
-                    _serialize_object(serializingObject, object, index);
-                    break;
-                default:
-                    throw new Error("invalid typeof " + typeof object + " " + JSON.stringify(object, null, " "));
-            }
-
-            return serializingObject;
-        }
-
-        var obj = _serialize(object);
-        // unset temporary ___index properties
-        objects.forEach(function (e) {
-            delete e.____index;
-        });
-
-        return JSON.stringify([index, obj]);// ,null," ");
-    }
-
-
-    function deserialize(serializationString) {
-
-
-        var data;
-        if (typeof serializationString === 'string') {
-            data = JSON.parse(serializationString);
-        } else if (typeof serializationString ==='object') {
-            data = serializationString;
-        }
-        var index = data[0],
-            obj = data[1],
-            cache = [];
-
-        function deserialize_node_or_value(node) {
-            if ("object" === typeof node) {
-                return deserialize_node(node);
-            }
-            return node;
-        }
-
-        function deserialize_node(node) {
-            // special treatment
-            if (!node) { return null;}
-
-            if (node.hasOwnProperty("d")) {
-                return new Date(node.d);
-            } else if (node.hasOwnProperty("j")) {
-                return node.j;
-            } else if (node.hasOwnProperty("o")) {
-
-                var object_id = node.o;
-                if (cache[object_id] !== undefined) {
-                    return cache[object_id];
-                }
-                var serializing_data = index[object_id];
-
-                var cache_object = _deserialize_object(serializing_data, object_id);
-                assert(cache[object_id] === cache_object);
-                return  cache_object;
-
-            } else if (node.hasOwnProperty("a")) {
-                // return _deserialize_object(node.o);
-                var arr = node.a.map(deserialize_node_or_value);
-                return arr;
-            }
-            throw new Error("Unsupported deserialize_node" + JSON.stringify(node));
-        }
-
-        function _deserialize_object(object_definition, object_id) {
-
-            var constructor, obj, data, v, className;
-
-            assert(object_definition.c);
-            assert(object_definition.d);
-
-            className = object_definition.c;
-            data = object_definition.d;
-
-            if (className === "Object") {
-                obj = {};
-            } else {
-                constructor = g_global[className];
-                if (!constructor) {
-                    throw new Error(" Cannot find constructor to deserialize class of type" + className + ". use declarePersistable(Constructor)");
-
-                }
-                assert(_.isFunction(constructor));
-                obj = new constructor();
-            }
-
-            cache[object_id] = obj;
-            for (v in data) {
-                if (data.hasOwnProperty(v)) {
-                    obj[v] = deserialize_node_or_value(data[v]);
-                }
-            }
-            return obj;
-        }
-
-
-        return deserialize_node(obj);
-    }
-
-    module.exports.deserialize = deserialize;
-    module.exports.serialize = serialize;
-    module.exports.declarePersistable = declarePersistable;
-
-    module.exports.serializeZ = function (obj, callback) {
-        var zlib = require("zlib");
-        var str = serialize(obj);
-        zlib.deflate(str, function (err, buff) {
-            if (err) {
-                return callback(err);
-            }
-            callback(null, buff);
-        });
-
-    };
-
-    module.exports.deserializeZ = function (data, callback) {
-
-        var zlib = require("zlib");
-        zlib.inflate(data, function (err, buff) {
-            if (err) {
-                return callback(err);
-            }
-            callback(null, deserialize(buff.toString()));
-        });
-
-    };
-
-
-}());
-
-
-},{"assert":23,"underscore":20,"zlib":38}],20:[function(require,module,exports){
-//     Underscore.js 1.6.0
-//     http://underscorejs.org
-//     (c) 2009-2014 Jeremy Ashkenas, DocumentCloud and Investigative Reporters & Editors
-//     Underscore may be freely distributed under the MIT license.
-
-(function() {
-
-  // Baseline setup
-  // --------------
-
-  // Establish the root object, `window` in the browser, or `exports` on the server.
-  var root = this;
-
-  // Save the previous value of the `_` variable.
-  var previousUnderscore = root._;
-
-  // Establish the object that gets returned to break out of a loop iteration.
-  var breaker = {};
-
-  // Save bytes in the minified (but not gzipped) version:
-  var ArrayProto = Array.prototype, ObjProto = Object.prototype, FuncProto = Function.prototype;
-
-  // Create quick reference variables for speed access to core prototypes.
-  var
-    push             = ArrayProto.push,
-    slice            = ArrayProto.slice,
-    concat           = ArrayProto.concat,
-    toString         = ObjProto.toString,
-    hasOwnProperty   = ObjProto.hasOwnProperty;
-
-  // All **ECMAScript 5** native function implementations that we hope to use
-  // are declared here.
-  var
-    nativeForEach      = ArrayProto.forEach,
-    nativeMap          = ArrayProto.map,
-    nativeReduce       = ArrayProto.reduce,
-    nativeReduceRight  = ArrayProto.reduceRight,
-    nativeFilter       = ArrayProto.filter,
-    nativeEvery        = ArrayProto.every,
-    nativeSome         = ArrayProto.some,
-    nativeIndexOf      = ArrayProto.indexOf,
-    nativeLastIndexOf  = ArrayProto.lastIndexOf,
-    nativeIsArray      = Array.isArray,
-    nativeKeys         = Object.keys,
-    nativeBind         = FuncProto.bind;
-
-  // Create a safe reference to the Underscore object for use below.
-  var _ = function(obj) {
-    if (obj instanceof _) return obj;
-    if (!(this instanceof _)) return new _(obj);
-    this._wrapped = obj;
-  };
-
-  // Export the Underscore object for **Node.js**, with
-  // backwards-compatibility for the old `require()` API. If we're in
-  // the browser, add `_` as a global object via a string identifier,
-  // for Closure Compiler "advanced" mode.
-  if (typeof exports !== 'undefined') {
-    if (typeof module !== 'undefined' && module.exports) {
-      exports = module.exports = _;
-    }
-    exports._ = _;
-  } else {
-    root._ = _;
-  }
-
-  // Current version.
-  _.VERSION = '1.6.0';
-
-  // Collection Functions
-  // --------------------
-
-  // The cornerstone, an `each` implementation, aka `forEach`.
-  // Handles objects with the built-in `forEach`, arrays, and raw objects.
-  // Delegates to **ECMAScript 5**'s native `forEach` if available.
-  var each = _.each = _.forEach = function(obj, iterator, context) {
-    if (obj == null) return obj;
-    if (nativeForEach && obj.forEach === nativeForEach) {
-      obj.forEach(iterator, context);
-    } else if (obj.length === +obj.length) {
-      for (var i = 0, length = obj.length; i < length; i++) {
-        if (iterator.call(context, obj[i], i, obj) === breaker) return;
-      }
-    } else {
-      var keys = _.keys(obj);
-      for (var i = 0, length = keys.length; i < length; i++) {
-        if (iterator.call(context, obj[keys[i]], keys[i], obj) === breaker) return;
-      }
-    }
-    return obj;
-  };
-
-  // Return the results of applying the iterator to each element.
-  // Delegates to **ECMAScript 5**'s native `map` if available.
-  _.map = _.collect = function(obj, iterator, context) {
-    var results = [];
-    if (obj == null) return results;
-    if (nativeMap && obj.map === nativeMap) return obj.map(iterator, context);
-    each(obj, function(value, index, list) {
-      results.push(iterator.call(context, value, index, list));
-    });
-    return results;
-  };
-
-  var reduceError = 'Reduce of empty array with no initial value';
-
-  // **Reduce** builds up a single result from a list of values, aka `inject`,
-  // or `foldl`. Delegates to **ECMAScript 5**'s native `reduce` if available.
-  _.reduce = _.foldl = _.inject = function(obj, iterator, memo, context) {
-    var initial = arguments.length > 2;
-    if (obj == null) obj = [];
-    if (nativeReduce && obj.reduce === nativeReduce) {
-      if (context) iterator = _.bind(iterator, context);
-      return initial ? obj.reduce(iterator, memo) : obj.reduce(iterator);
-    }
-    each(obj, function(value, index, list) {
-      if (!initial) {
-        memo = value;
-        initial = true;
-      } else {
-        memo = iterator.call(context, memo, value, index, list);
-      }
-    });
-    if (!initial) throw new TypeError(reduceError);
-    return memo;
-  };
-
-  // The right-associative version of reduce, also known as `foldr`.
-  // Delegates to **ECMAScript 5**'s native `reduceRight` if available.
-  _.reduceRight = _.foldr = function(obj, iterator, memo, context) {
-    var initial = arguments.length > 2;
-    if (obj == null) obj = [];
-    if (nativeReduceRight && obj.reduceRight === nativeReduceRight) {
-      if (context) iterator = _.bind(iterator, context);
-      return initial ? obj.reduceRight(iterator, memo) : obj.reduceRight(iterator);
-    }
-    var length = obj.length;
-    if (length !== +length) {
-      var keys = _.keys(obj);
-      length = keys.length;
-    }
-    each(obj, function(value, index, list) {
-      index = keys ? keys[--length] : --length;
-      if (!initial) {
-        memo = obj[index];
-        initial = true;
-      } else {
-        memo = iterator.call(context, memo, obj[index], index, list);
-      }
-    });
-    if (!initial) throw new TypeError(reduceError);
-    return memo;
-  };
-
-  // Return the first value which passes a truth test. Aliased as `detect`.
-  _.find = _.detect = function(obj, predicate, context) {
-    var result;
-    any(obj, function(value, index, list) {
-      if (predicate.call(context, value, index, list)) {
-        result = value;
-        return true;
-      }
-    });
-    return result;
-  };
-
-  // Return all the elements that pass a truth test.
-  // Delegates to **ECMAScript 5**'s native `filter` if available.
-  // Aliased as `select`.
-  _.filter = _.select = function(obj, predicate, context) {
-    var results = [];
-    if (obj == null) return results;
-    if (nativeFilter && obj.filter === nativeFilter) return obj.filter(predicate, context);
-    each(obj, function(value, index, list) {
-      if (predicate.call(context, value, index, list)) results.push(value);
-    });
-    return results;
-  };
-
-  // Return all the elements for which a truth test fails.
-  _.reject = function(obj, predicate, context) {
-    return _.filter(obj, function(value, index, list) {
-      return !predicate.call(context, value, index, list);
-    }, context);
-  };
-
-  // Determine whether all of the elements match a truth test.
-  // Delegates to **ECMAScript 5**'s native `every` if available.
-  // Aliased as `all`.
-  _.every = _.all = function(obj, predicate, context) {
-    predicate || (predicate = _.identity);
-    var result = true;
-    if (obj == null) return result;
-    if (nativeEvery && obj.every === nativeEvery) return obj.every(predicate, context);
-    each(obj, function(value, index, list) {
-      if (!(result = result && predicate.call(context, value, index, list))) return breaker;
-    });
-    return !!result;
-  };
-
-  // Determine if at least one element in the object matches a truth test.
-  // Delegates to **ECMAScript 5**'s native `some` if available.
-  // Aliased as `any`.
-  var any = _.some = _.any = function(obj, predicate, context) {
-    predicate || (predicate = _.identity);
-    var result = false;
-    if (obj == null) return result;
-    if (nativeSome && obj.some === nativeSome) return obj.some(predicate, context);
-    each(obj, function(value, index, list) {
-      if (result || (result = predicate.call(context, value, index, list))) return breaker;
-    });
-    return !!result;
-  };
-
-  // Determine if the array or object contains a given value (using `===`).
-  // Aliased as `include`.
-  _.contains = _.include = function(obj, target) {
-    if (obj == null) return false;
-    if (nativeIndexOf && obj.indexOf === nativeIndexOf) return obj.indexOf(target) != -1;
-    return any(obj, function(value) {
-      return value === target;
-    });
-  };
-
-  // Invoke a method (with arguments) on every item in a collection.
-  _.invoke = function(obj, method) {
-    var args = slice.call(arguments, 2);
-    var isFunc = _.isFunction(method);
-    return _.map(obj, function(value) {
-      return (isFunc ? method : value[method]).apply(value, args);
-    });
-  };
-
-  // Convenience version of a common use case of `map`: fetching a property.
-  _.pluck = function(obj, key) {
-    return _.map(obj, _.property(key));
-  };
-
-  // Convenience version of a common use case of `filter`: selecting only objects
-  // containing specific `key:value` pairs.
-  _.where = function(obj, attrs) {
-    return _.filter(obj, _.matches(attrs));
-  };
-
-  // Convenience version of a common use case of `find`: getting the first object
-  // containing specific `key:value` pairs.
-  _.findWhere = function(obj, attrs) {
-    return _.find(obj, _.matches(attrs));
-  };
-
-  // Return the maximum element or (element-based computation).
-  // Can't optimize arrays of integers longer than 65,535 elements.
-  // See [WebKit Bug 80797](https://bugs.webkit.org/show_bug.cgi?id=80797)
-  _.max = function(obj, iterator, context) {
-    if (!iterator && _.isArray(obj) && obj[0] === +obj[0] && obj.length < 65535) {
-      return Math.max.apply(Math, obj);
-    }
-    var result = -Infinity, lastComputed = -Infinity;
-    each(obj, function(value, index, list) {
-      var computed = iterator ? iterator.call(context, value, index, list) : value;
-      if (computed > lastComputed) {
-        result = value;
-        lastComputed = computed;
-      }
-    });
-    return result;
-  };
-
-  // Return the minimum element (or element-based computation).
-  _.min = function(obj, iterator, context) {
-    if (!iterator && _.isArray(obj) && obj[0] === +obj[0] && obj.length < 65535) {
-      return Math.min.apply(Math, obj);
-    }
-    var result = Infinity, lastComputed = Infinity;
-    each(obj, function(value, index, list) {
-      var computed = iterator ? iterator.call(context, value, index, list) : value;
-      if (computed < lastComputed) {
-        result = value;
-        lastComputed = computed;
-      }
-    });
-    return result;
-  };
-
-  // Shuffle an array, using the modern version of the
-  // [Fisher-Yates shuffle](http://en.wikipedia.org/wiki/Fisher–Yates_shuffle).
-  _.shuffle = function(obj) {
-    var rand;
-    var index = 0;
-    var shuffled = [];
-    each(obj, function(value) {
-      rand = _.random(index++);
-      shuffled[index - 1] = shuffled[rand];
-      shuffled[rand] = value;
-    });
-    return shuffled;
-  };
-
-  // Sample **n** random values from a collection.
-  // If **n** is not specified, returns a single random element.
-  // The internal `guard` argument allows it to work with `map`.
-  _.sample = function(obj, n, guard) {
-    if (n == null || guard) {
-      if (obj.length !== +obj.length) obj = _.values(obj);
-      return obj[_.random(obj.length - 1)];
-    }
-    return _.shuffle(obj).slice(0, Math.max(0, n));
-  };
-
-  // An internal function to generate lookup iterators.
-  var lookupIterator = function(value) {
-    if (value == null) return _.identity;
-    if (_.isFunction(value)) return value;
-    return _.property(value);
-  };
-
-  // Sort the object's values by a criterion produced by an iterator.
-  _.sortBy = function(obj, iterator, context) {
-    iterator = lookupIterator(iterator);
-    return _.pluck(_.map(obj, function(value, index, list) {
-      return {
-        value: value,
-        index: index,
-        criteria: iterator.call(context, value, index, list)
-      };
-    }).sort(function(left, right) {
-      var a = left.criteria;
-      var b = right.criteria;
-      if (a !== b) {
-        if (a > b || a === void 0) return 1;
-        if (a < b || b === void 0) return -1;
-      }
-      return left.index - right.index;
-    }), 'value');
-  };
-
-  // An internal function used for aggregate "group by" operations.
-  var group = function(behavior) {
-    return function(obj, iterator, context) {
-      var result = {};
-      iterator = lookupIterator(iterator);
-      each(obj, function(value, index) {
-        var key = iterator.call(context, value, index, obj);
-        behavior(result, key, value);
-      });
-      return result;
-    };
-  };
-
-  // Groups the object's values by a criterion. Pass either a string attribute
-  // to group by, or a function that returns the criterion.
-  _.groupBy = group(function(result, key, value) {
-    _.has(result, key) ? result[key].push(value) : result[key] = [value];
-  });
-
-  // Indexes the object's values by a criterion, similar to `groupBy`, but for
-  // when you know that your index values will be unique.
-  _.indexBy = group(function(result, key, value) {
-    result[key] = value;
-  });
-
-  // Counts instances of an object that group by a certain criterion. Pass
-  // either a string attribute to count by, or a function that returns the
-  // criterion.
-  _.countBy = group(function(result, key) {
-    _.has(result, key) ? result[key]++ : result[key] = 1;
-  });
-
-  // Use a comparator function to figure out the smallest index at which
-  // an object should be inserted so as to maintain order. Uses binary search.
-  _.sortedIndex = function(array, obj, iterator, context) {
-    iterator = lookupIterator(iterator);
-    var value = iterator.call(context, obj);
-    var low = 0, high = array.length;
-    while (low < high) {
-      var mid = (low + high) >>> 1;
-      iterator.call(context, array[mid]) < value ? low = mid + 1 : high = mid;
-    }
-    return low;
-  };
-
-  // Safely create a real, live array from anything iterable.
-  _.toArray = function(obj) {
-    if (!obj) return [];
-    if (_.isArray(obj)) return slice.call(obj);
-    if (obj.length === +obj.length) return _.map(obj, _.identity);
-    return _.values(obj);
-  };
-
-  // Return the number of elements in an object.
-  _.size = function(obj) {
-    if (obj == null) return 0;
-    return (obj.length === +obj.length) ? obj.length : _.keys(obj).length;
-  };
-
-  // Array Functions
-  // ---------------
-
-  // Get the first element of an array. Passing **n** will return the first N
-  // values in the array. Aliased as `head` and `take`. The **guard** check
-  // allows it to work with `_.map`.
-  _.first = _.head = _.take = function(array, n, guard) {
-    if (array == null) return void 0;
-    if ((n == null) || guard) return array[0];
-    if (n < 0) return [];
-    return slice.call(array, 0, n);
-  };
-
-  // Returns everything but the last entry of the array. Especially useful on
-  // the arguments object. Passing **n** will return all the values in
-  // the array, excluding the last N. The **guard** check allows it to work with
-  // `_.map`.
-  _.initial = function(array, n, guard) {
-    return slice.call(array, 0, array.length - ((n == null) || guard ? 1 : n));
-  };
-
-  // Get the last element of an array. Passing **n** will return the last N
-  // values in the array. The **guard** check allows it to work with `_.map`.
-  _.last = function(array, n, guard) {
-    if (array == null) return void 0;
-    if ((n == null) || guard) return array[array.length - 1];
-    return slice.call(array, Math.max(array.length - n, 0));
-  };
-
-  // Returns everything but the first entry of the array. Aliased as `tail` and `drop`.
-  // Especially useful on the arguments object. Passing an **n** will return
-  // the rest N values in the array. The **guard**
-  // check allows it to work with `_.map`.
-  _.rest = _.tail = _.drop = function(array, n, guard) {
-    return slice.call(array, (n == null) || guard ? 1 : n);
-  };
-
-  // Trim out all falsy values from an array.
-  _.compact = function(array) {
-    return _.filter(array, _.identity);
-  };
-
-  // Internal implementation of a recursive `flatten` function.
-  var flatten = function(input, shallow, output) {
-    if (shallow && _.every(input, _.isArray)) {
-      return concat.apply(output, input);
-    }
-    each(input, function(value) {
-      if (_.isArray(value) || _.isArguments(value)) {
-        shallow ? push.apply(output, value) : flatten(value, shallow, output);
-      } else {
-        output.push(value);
-      }
-    });
-    return output;
-  };
-
-  // Flatten out an array, either recursively (by default), or just one level.
-  _.flatten = function(array, shallow) {
-    return flatten(array, shallow, []);
-  };
-
-  // Return a version of the array that does not contain the specified value(s).
-  _.without = function(array) {
-    return _.difference(array, slice.call(arguments, 1));
-  };
-
-  // Split an array into two arrays: one whose elements all satisfy the given
-  // predicate, and one whose elements all do not satisfy the predicate.
-  _.partition = function(array, predicate) {
-    var pass = [], fail = [];
-    each(array, function(elem) {
-      (predicate(elem) ? pass : fail).push(elem);
-    });
-    return [pass, fail];
-  };
-
-  // Produce a duplicate-free version of the array. If the array has already
-  // been sorted, you have the option of using a faster algorithm.
-  // Aliased as `unique`.
-  _.uniq = _.unique = function(array, isSorted, iterator, context) {
-    if (_.isFunction(isSorted)) {
-      context = iterator;
-      iterator = isSorted;
-      isSorted = false;
-    }
-    var initial = iterator ? _.map(array, iterator, context) : array;
-    var results = [];
-    var seen = [];
-    each(initial, function(value, index) {
-      if (isSorted ? (!index || seen[seen.length - 1] !== value) : !_.contains(seen, value)) {
-        seen.push(value);
-        results.push(array[index]);
-      }
-    });
-    return results;
-  };
-
-  // Produce an array that contains the union: each distinct element from all of
-  // the passed-in arrays.
-  _.union = function() {
-    return _.uniq(_.flatten(arguments, true));
-  };
-
-  // Produce an array that contains every item shared between all the
-  // passed-in arrays.
-  _.intersection = function(array) {
-    var rest = slice.call(arguments, 1);
-    return _.filter(_.uniq(array), function(item) {
-      return _.every(rest, function(other) {
-        return _.contains(other, item);
-      });
-    });
-  };
-
-  // Take the difference between one array and a number of other arrays.
-  // Only the elements present in just the first array will remain.
-  _.difference = function(array) {
-    var rest = concat.apply(ArrayProto, slice.call(arguments, 1));
-    return _.filter(array, function(value){ return !_.contains(rest, value); });
-  };
-
-  // Zip together multiple lists into a single array -- elements that share
-  // an index go together.
-  _.zip = function() {
-    var length = _.max(_.pluck(arguments, 'length').concat(0));
-    var results = new Array(length);
-    for (var i = 0; i < length; i++) {
-      results[i] = _.pluck(arguments, '' + i);
-    }
-    return results;
-  };
-
-  // Converts lists into objects. Pass either a single array of `[key, value]`
-  // pairs, or two parallel arrays of the same length -- one of keys, and one of
-  // the corresponding values.
-  _.object = function(list, values) {
-    if (list == null) return {};
-    var result = {};
-    for (var i = 0, length = list.length; i < length; i++) {
-      if (values) {
-        result[list[i]] = values[i];
-      } else {
-        result[list[i][0]] = list[i][1];
-      }
-    }
-    return result;
-  };
-
-  // If the browser doesn't supply us with indexOf (I'm looking at you, **MSIE**),
-  // we need this function. Return the position of the first occurrence of an
-  // item in an array, or -1 if the item is not included in the array.
-  // Delegates to **ECMAScript 5**'s native `indexOf` if available.
-  // If the array is large and already in sort order, pass `true`
-  // for **isSorted** to use binary search.
-  _.indexOf = function(array, item, isSorted) {
-    if (array == null) return -1;
-    var i = 0, length = array.length;
-    if (isSorted) {
-      if (typeof isSorted == 'number') {
-        i = (isSorted < 0 ? Math.max(0, length + isSorted) : isSorted);
-      } else {
-        i = _.sortedIndex(array, item);
-        return array[i] === item ? i : -1;
-      }
-    }
-    if (nativeIndexOf && array.indexOf === nativeIndexOf) return array.indexOf(item, isSorted);
-    for (; i < length; i++) if (array[i] === item) return i;
-    return -1;
-  };
-
-  // Delegates to **ECMAScript 5**'s native `lastIndexOf` if available.
-  _.lastIndexOf = function(array, item, from) {
-    if (array == null) return -1;
-    var hasIndex = from != null;
-    if (nativeLastIndexOf && array.lastIndexOf === nativeLastIndexOf) {
-      return hasIndex ? array.lastIndexOf(item, from) : array.lastIndexOf(item);
-    }
-    var i = (hasIndex ? from : array.length);
-    while (i--) if (array[i] === item) return i;
-    return -1;
-  };
-
-  // Generate an integer Array containing an arithmetic progression. A port of
-  // the native Python `range()` function. See
-  // [the Python documentation](http://docs.python.org/library/functions.html#range).
-  _.range = function(start, stop, step) {
-    if (arguments.length <= 1) {
-      stop = start || 0;
-      start = 0;
-    }
-    step = arguments[2] || 1;
-
-    var length = Math.max(Math.ceil((stop - start) / step), 0);
-    var idx = 0;
-    var range = new Array(length);
-
-    while(idx < length) {
-      range[idx++] = start;
-      start += step;
-    }
-
-    return range;
-  };
-
-  // Function (ahem) Functions
-  // ------------------
-
-  // Reusable constructor function for prototype setting.
-  var ctor = function(){};
-
-  // Create a function bound to a given object (assigning `this`, and arguments,
-  // optionally). Delegates to **ECMAScript 5**'s native `Function.bind` if
-  // available.
-  _.bind = function(func, context) {
-    var args, bound;
-    if (nativeBind && func.bind === nativeBind) return nativeBind.apply(func, slice.call(arguments, 1));
-    if (!_.isFunction(func)) throw new TypeError;
-    args = slice.call(arguments, 2);
-    return bound = function() {
-      if (!(this instanceof bound)) return func.apply(context, args.concat(slice.call(arguments)));
-      ctor.prototype = func.prototype;
-      var self = new ctor;
-      ctor.prototype = null;
-      var result = func.apply(self, args.concat(slice.call(arguments)));
-      if (Object(result) === result) return result;
-      return self;
-    };
-  };
-
-  // Partially apply a function by creating a version that has had some of its
-  // arguments pre-filled, without changing its dynamic `this` context. _ acts
-  // as a placeholder, allowing any combination of arguments to be pre-filled.
-  _.partial = function(func) {
-    var boundArgs = slice.call(arguments, 1);
-    return function() {
-      var position = 0;
-      var args = boundArgs.slice();
-      for (var i = 0, length = args.length; i < length; i++) {
-        if (args[i] === _) args[i] = arguments[position++];
-      }
-      while (position < arguments.length) args.push(arguments[position++]);
-      return func.apply(this, args);
-    };
-  };
-
-  // Bind a number of an object's methods to that object. Remaining arguments
-  // are the method names to be bound. Useful for ensuring that all callbacks
-  // defined on an object belong to it.
-  _.bindAll = function(obj) {
-    var funcs = slice.call(arguments, 1);
-    if (funcs.length === 0) throw new Error('bindAll must be passed function names');
-    each(funcs, function(f) { obj[f] = _.bind(obj[f], obj); });
-    return obj;
-  };
-
-  // Memoize an expensive function by storing its results.
-  _.memoize = function(func, hasher) {
-    var memo = {};
-    hasher || (hasher = _.identity);
-    return function() {
-      var key = hasher.apply(this, arguments);
-      return _.has(memo, key) ? memo[key] : (memo[key] = func.apply(this, arguments));
-    };
-  };
-
-  // Delays a function for the given number of milliseconds, and then calls
-  // it with the arguments supplied.
-  _.delay = function(func, wait) {
-    var args = slice.call(arguments, 2);
-    return setTimeout(function(){ return func.apply(null, args); }, wait);
-  };
-
-  // Defers a function, scheduling it to run after the current call stack has
-  // cleared.
-  _.defer = function(func) {
-    return _.delay.apply(_, [func, 1].concat(slice.call(arguments, 1)));
-  };
-
-  // Returns a function, that, when invoked, will only be triggered at most once
-  // during a given window of time. Normally, the throttled function will run
-  // as much as it can, without ever going more than once per `wait` duration;
-  // but if you'd like to disable the execution on the leading edge, pass
-  // `{leading: false}`. To disable execution on the trailing edge, ditto.
-  _.throttle = function(func, wait, options) {
-    var context, args, result;
-    var timeout = null;
-    var previous = 0;
-    options || (options = {});
-    var later = function() {
-      previous = options.leading === false ? 0 : _.now();
-      timeout = null;
-      result = func.apply(context, args);
-      context = args = null;
-    };
-    return function() {
-      var now = _.now();
-      if (!previous && options.leading === false) previous = now;
-      var remaining = wait - (now - previous);
-      context = this;
-      args = arguments;
-      if (remaining <= 0) {
-        clearTimeout(timeout);
-        timeout = null;
-        previous = now;
-        result = func.apply(context, args);
-        context = args = null;
-      } else if (!timeout && options.trailing !== false) {
-        timeout = setTimeout(later, remaining);
-      }
-      return result;
-    };
-  };
-
-  // Returns a function, that, as long as it continues to be invoked, will not
-  // be triggered. The function will be called after it stops being called for
-  // N milliseconds. If `immediate` is passed, trigger the function on the
-  // leading edge, instead of the trailing.
-  _.debounce = function(func, wait, immediate) {
-    var timeout, args, context, timestamp, result;
-
-    var later = function() {
-      var last = _.now() - timestamp;
-      if (last < wait) {
-        timeout = setTimeout(later, wait - last);
-      } else {
-        timeout = null;
-        if (!immediate) {
-          result = func.apply(context, args);
-          context = args = null;
-        }
-      }
-    };
-
-    return function() {
-      context = this;
-      args = arguments;
-      timestamp = _.now();
-      var callNow = immediate && !timeout;
-      if (!timeout) {
-        timeout = setTimeout(later, wait);
-      }
-      if (callNow) {
-        result = func.apply(context, args);
-        context = args = null;
-      }
-
-      return result;
-    };
-  };
-
-  // Returns a function that will be executed at most one time, no matter how
-  // often you call it. Useful for lazy initialization.
-  _.once = function(func) {
-    var ran = false, memo;
-    return function() {
-      if (ran) return memo;
-      ran = true;
-      memo = func.apply(this, arguments);
-      func = null;
-      return memo;
-    };
-  };
-
-  // Returns the first function passed as an argument to the second,
-  // allowing you to adjust arguments, run code before and after, and
-  // conditionally execute the original function.
-  _.wrap = function(func, wrapper) {
-    return _.partial(wrapper, func);
-  };
-
-  // Returns a function that is the composition of a list of functions, each
-  // consuming the return value of the function that follows.
-  _.compose = function() {
-    var funcs = arguments;
-    return function() {
-      var args = arguments;
-      for (var i = funcs.length - 1; i >= 0; i--) {
-        args = [funcs[i].apply(this, args)];
-      }
-      return args[0];
-    };
-  };
-
-  // Returns a function that will only be executed after being called N times.
-  _.after = function(times, func) {
-    return function() {
-      if (--times < 1) {
-        return func.apply(this, arguments);
-      }
-    };
-  };
-
-  // Object Functions
-  // ----------------
-
-  // Retrieve the names of an object's properties.
-  // Delegates to **ECMAScript 5**'s native `Object.keys`
-  _.keys = function(obj) {
-    if (!_.isObject(obj)) return [];
-    if (nativeKeys) return nativeKeys(obj);
-    var keys = [];
-    for (var key in obj) if (_.has(obj, key)) keys.push(key);
-    return keys;
-  };
-
-  // Retrieve the values of an object's properties.
-  _.values = function(obj) {
-    var keys = _.keys(obj);
-    var length = keys.length;
-    var values = new Array(length);
-    for (var i = 0; i < length; i++) {
-      values[i] = obj[keys[i]];
-    }
-    return values;
-  };
-
-  // Convert an object into a list of `[key, value]` pairs.
-  _.pairs = function(obj) {
-    var keys = _.keys(obj);
-    var length = keys.length;
-    var pairs = new Array(length);
-    for (var i = 0; i < length; i++) {
-      pairs[i] = [keys[i], obj[keys[i]]];
-    }
-    return pairs;
-  };
-
-  // Invert the keys and values of an object. The values must be serializable.
-  _.invert = function(obj) {
-    var result = {};
-    var keys = _.keys(obj);
-    for (var i = 0, length = keys.length; i < length; i++) {
-      result[obj[keys[i]]] = keys[i];
-    }
-    return result;
-  };
-
-  // Return a sorted list of the function names available on the object.
-  // Aliased as `methods`
-  _.functions = _.methods = function(obj) {
-    var names = [];
-    for (var key in obj) {
-      if (_.isFunction(obj[key])) names.push(key);
-    }
-    return names.sort();
-  };
-
-  // Extend a given object with all the properties in passed-in object(s).
-  _.extend = function(obj) {
-    each(slice.call(arguments, 1), function(source) {
-      if (source) {
-        for (var prop in source) {
-          obj[prop] = source[prop];
-        }
-      }
-    });
-    return obj;
-  };
-
-  // Return a copy of the object only containing the whitelisted properties.
-  _.pick = function(obj) {
-    var copy = {};
-    var keys = concat.apply(ArrayProto, slice.call(arguments, 1));
-    each(keys, function(key) {
-      if (key in obj) copy[key] = obj[key];
-    });
-    return copy;
-  };
-
-   // Return a copy of the object without the blacklisted properties.
-  _.omit = function(obj) {
-    var copy = {};
-    var keys = concat.apply(ArrayProto, slice.call(arguments, 1));
-    for (var key in obj) {
-      if (!_.contains(keys, key)) copy[key] = obj[key];
-    }
-    return copy;
-  };
-
-  // Fill in a given object with default properties.
-  _.defaults = function(obj) {
-    each(slice.call(arguments, 1), function(source) {
-      if (source) {
-        for (var prop in source) {
-          if (obj[prop] === void 0) obj[prop] = source[prop];
-        }
-      }
-    });
-    return obj;
-  };
-
-  // Create a (shallow-cloned) duplicate of an object.
-  _.clone = function(obj) {
-    if (!_.isObject(obj)) return obj;
-    return _.isArray(obj) ? obj.slice() : _.extend({}, obj);
-  };
-
-  // Invokes interceptor with the obj, and then returns obj.
-  // The primary purpose of this method is to "tap into" a method chain, in
-  // order to perform operations on intermediate results within the chain.
-  _.tap = function(obj, interceptor) {
-    interceptor(obj);
-    return obj;
-  };
-
-  // Internal recursive comparison function for `isEqual`.
-  var eq = function(a, b, aStack, bStack) {
-    // Identical objects are equal. `0 === -0`, but they aren't identical.
-    // See the [Harmony `egal` proposal](http://wiki.ecmascript.org/doku.php?id=harmony:egal).
-    if (a === b) return a !== 0 || 1 / a == 1 / b;
-    // A strict comparison is necessary because `null == undefined`.
-    if (a == null || b == null) return a === b;
-    // Unwrap any wrapped objects.
-    if (a instanceof _) a = a._wrapped;
-    if (b instanceof _) b = b._wrapped;
-    // Compare `[[Class]]` names.
-    var className = toString.call(a);
-    if (className != toString.call(b)) return false;
-    switch (className) {
-      // Strings, numbers, dates, and booleans are compared by value.
-      case '[object String]':
-        // Primitives and their corresponding object wrappers are equivalent; thus, `"5"` is
-        // equivalent to `new String("5")`.
-        return a == String(b);
-      case '[object Number]':
-        // `NaN`s are equivalent, but non-reflexive. An `egal` comparison is performed for
-        // other numeric values.
-        return a != +a ? b != +b : (a == 0 ? 1 / a == 1 / b : a == +b);
-      case '[object Date]':
-      case '[object Boolean]':
-        // Coerce dates and booleans to numeric primitive values. Dates are compared by their
-        // millisecond representations. Note that invalid dates with millisecond representations
-        // of `NaN` are not equivalent.
-        return +a == +b;
-      // RegExps are compared by their source patterns and flags.
-      case '[object RegExp]':
-        return a.source == b.source &&
-               a.global == b.global &&
-               a.multiline == b.multiline &&
-               a.ignoreCase == b.ignoreCase;
-    }
-    if (typeof a != 'object' || typeof b != 'object') return false;
-    // Assume equality for cyclic structures. The algorithm for detecting cyclic
-    // structures is adapted from ES 5.1 section 15.12.3, abstract operation `JO`.
-    var length = aStack.length;
-    while (length--) {
-      // Linear search. Performance is inversely proportional to the number of
-      // unique nested structures.
-      if (aStack[length] == a) return bStack[length] == b;
-    }
-    // Objects with different constructors are not equivalent, but `Object`s
-    // from different frames are.
-    var aCtor = a.constructor, bCtor = b.constructor;
-    if (aCtor !== bCtor && !(_.isFunction(aCtor) && (aCtor instanceof aCtor) &&
-                             _.isFunction(bCtor) && (bCtor instanceof bCtor))
-                        && ('constructor' in a && 'constructor' in b)) {
-      return false;
-    }
-    // Add the first object to the stack of traversed objects.
-    aStack.push(a);
-    bStack.push(b);
-    var size = 0, result = true;
-    // Recursively compare objects and arrays.
-    if (className == '[object Array]') {
-      // Compare array lengths to determine if a deep comparison is necessary.
-      size = a.length;
-      result = size == b.length;
-      if (result) {
-        // Deep compare the contents, ignoring non-numeric properties.
-        while (size--) {
-          if (!(result = eq(a[size], b[size], aStack, bStack))) break;
-        }
-      }
-    } else {
-      // Deep compare objects.
-      for (var key in a) {
-        if (_.has(a, key)) {
-          // Count the expected number of properties.
-          size++;
-          // Deep compare each member.
-          if (!(result = _.has(b, key) && eq(a[key], b[key], aStack, bStack))) break;
-        }
-      }
-      // Ensure that both objects contain the same number of properties.
-      if (result) {
-        for (key in b) {
-          if (_.has(b, key) && !(size--)) break;
-        }
-        result = !size;
-      }
-    }
-    // Remove the first object from the stack of traversed objects.
-    aStack.pop();
-    bStack.pop();
-    return result;
-  };
-
-  // Perform a deep comparison to check if two objects are equal.
-  _.isEqual = function(a, b) {
-    return eq(a, b, [], []);
-  };
-
-  // Is a given array, string, or object empty?
-  // An "empty" object has no enumerable own-properties.
-  _.isEmpty = function(obj) {
-    if (obj == null) return true;
-    if (_.isArray(obj) || _.isString(obj)) return obj.length === 0;
-    for (var key in obj) if (_.has(obj, key)) return false;
-    return true;
-  };
-
-  // Is a given value a DOM element?
-  _.isElement = function(obj) {
-    return !!(obj && obj.nodeType === 1);
-  };
-
-  // Is a given value an array?
-  // Delegates to ECMA5's native Array.isArray
-  _.isArray = nativeIsArray || function(obj) {
-    return toString.call(obj) == '[object Array]';
-  };
-
-  // Is a given variable an object?
-  _.isObject = function(obj) {
-    return obj === Object(obj);
-  };
-
-  // Add some isType methods: isArguments, isFunction, isString, isNumber, isDate, isRegExp.
-  each(['Arguments', 'Function', 'String', 'Number', 'Date', 'RegExp'], function(name) {
-    _['is' + name] = function(obj) {
-      return toString.call(obj) == '[object ' + name + ']';
-    };
-  });
-
-  // Define a fallback version of the method in browsers (ahem, IE), where
-  // there isn't any inspectable "Arguments" type.
-  if (!_.isArguments(arguments)) {
-    _.isArguments = function(obj) {
-      return !!(obj && _.has(obj, 'callee'));
-    };
-  }
-
-  // Optimize `isFunction` if appropriate.
-  if (typeof (/./) !== 'function') {
-    _.isFunction = function(obj) {
-      return typeof obj === 'function';
-    };
-  }
-
-  // Is a given object a finite number?
-  _.isFinite = function(obj) {
-    return isFinite(obj) && !isNaN(parseFloat(obj));
-  };
-
-  // Is the given value `NaN`? (NaN is the only number which does not equal itself).
-  _.isNaN = function(obj) {
-    return _.isNumber(obj) && obj != +obj;
-  };
-
-  // Is a given value a boolean?
-  _.isBoolean = function(obj) {
-    return obj === true || obj === false || toString.call(obj) == '[object Boolean]';
-  };
-
-  // Is a given value equal to null?
-  _.isNull = function(obj) {
-    return obj === null;
-  };
-
-  // Is a given variable undefined?
-  _.isUndefined = function(obj) {
-    return obj === void 0;
-  };
-
-  // Shortcut function for checking if an object has a given property directly
-  // on itself (in other words, not on a prototype).
-  _.has = function(obj, key) {
-    return hasOwnProperty.call(obj, key);
-  };
-
-  // Utility Functions
-  // -----------------
-
-  // Run Underscore.js in *noConflict* mode, returning the `_` variable to its
-  // previous owner. Returns a reference to the Underscore object.
-  _.noConflict = function() {
-    root._ = previousUnderscore;
-    return this;
-  };
-
-  // Keep the identity function around for default iterators.
-  _.identity = function(value) {
-    return value;
-  };
-
-  _.constant = function(value) {
-    return function () {
-      return value;
-    };
-  };
-
-  _.property = function(key) {
-    return function(obj) {
-      return obj[key];
-    };
-  };
-
-  // Returns a predicate for checking whether an object has a given set of `key:value` pairs.
-  _.matches = function(attrs) {
-    return function(obj) {
-      if (obj === attrs) return true; //avoid comparing an object to itself.
-      for (var key in attrs) {
-        if (attrs[key] !== obj[key])
-          return false;
-      }
-      return true;
-    }
-  };
-
-  // Run a function **n** times.
-  _.times = function(n, iterator, context) {
-    var accum = Array(Math.max(0, n));
-    for (var i = 0; i < n; i++) accum[i] = iterator.call(context, i);
-    return accum;
-  };
-
-  // Return a random integer between min and max (inclusive).
-  _.random = function(min, max) {
-    if (max == null) {
-      max = min;
-      min = 0;
-    }
-    return min + Math.floor(Math.random() * (max - min + 1));
-  };
-
-  // A (possibly faster) way to get the current timestamp as an integer.
-  _.now = Date.now || function() { return new Date().getTime(); };
-
-  // List of HTML entities for escaping.
-  var entityMap = {
-    escape: {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#x27;'
-    }
-  };
-  entityMap.unescape = _.invert(entityMap.escape);
-
-  // Regexes containing the keys and values listed immediately above.
-  var entityRegexes = {
-    escape:   new RegExp('[' + _.keys(entityMap.escape).join('') + ']', 'g'),
-    unescape: new RegExp('(' + _.keys(entityMap.unescape).join('|') + ')', 'g')
-  };
-
-  // Functions for escaping and unescaping strings to/from HTML interpolation.
-  _.each(['escape', 'unescape'], function(method) {
-    _[method] = function(string) {
-      if (string == null) return '';
-      return ('' + string).replace(entityRegexes[method], function(match) {
-        return entityMap[method][match];
-      });
-    };
-  });
-
-  // If the value of the named `property` is a function then invoke it with the
-  // `object` as context; otherwise, return it.
-  _.result = function(object, property) {
-    if (object == null) return void 0;
-    var value = object[property];
-    return _.isFunction(value) ? value.call(object) : value;
-  };
-
-  // Add your own custom functions to the Underscore object.
-  _.mixin = function(obj) {
-    each(_.functions(obj), function(name) {
-      var func = _[name] = obj[name];
-      _.prototype[name] = function() {
-        var args = [this._wrapped];
-        push.apply(args, arguments);
-        return result.call(this, func.apply(_, args));
-      };
-    });
-  };
-
-  // Generate a unique integer id (unique within the entire client session).
-  // Useful for temporary DOM ids.
-  var idCounter = 0;
-  _.uniqueId = function(prefix) {
-    var id = ++idCounter + '';
-    return prefix ? prefix + id : id;
-  };
-
-  // By default, Underscore uses ERB-style template delimiters, change the
-  // following template settings to use alternative delimiters.
-  _.templateSettings = {
-    evaluate    : /<%([\s\S]+?)%>/g,
-    interpolate : /<%=([\s\S]+?)%>/g,
-    escape      : /<%-([\s\S]+?)%>/g
-  };
-
-  // When customizing `templateSettings`, if you don't want to define an
-  // interpolation, evaluation or escaping regex, we need one that is
-  // guaranteed not to match.
-  var noMatch = /(.)^/;
-
-  // Certain characters need to be escaped so that they can be put into a
-  // string literal.
-  var escapes = {
-    "'":      "'",
-    '\\':     '\\',
-    '\r':     'r',
-    '\n':     'n',
-    '\t':     't',
-    '\u2028': 'u2028',
-    '\u2029': 'u2029'
-  };
-
-  var escaper = /\\|'|\r|\n|\t|\u2028|\u2029/g;
-
-  // JavaScript micro-templating, similar to John Resig's implementation.
-  // Underscore templating handles arbitrary delimiters, preserves whitespace,
-  // and correctly escapes quotes within interpolated code.
-  _.template = function(text, data, settings) {
-    var render;
-    settings = _.defaults({}, settings, _.templateSettings);
-
-    // Combine delimiters into one regular expression via alternation.
-    var matcher = new RegExp([
-      (settings.escape || noMatch).source,
-      (settings.interpolate || noMatch).source,
-      (settings.evaluate || noMatch).source
-    ].join('|') + '|$', 'g');
-
-    // Compile the template source, escaping string literals appropriately.
-    var index = 0;
-    var source = "__p+='";
-    text.replace(matcher, function(match, escape, interpolate, evaluate, offset) {
-      source += text.slice(index, offset)
-        .replace(escaper, function(match) { return '\\' + escapes[match]; });
-
-      if (escape) {
-        source += "'+\n((__t=(" + escape + "))==null?'':_.escape(__t))+\n'";
-      }
-      if (interpolate) {
-        source += "'+\n((__t=(" + interpolate + "))==null?'':__t)+\n'";
-      }
-      if (evaluate) {
-        source += "';\n" + evaluate + "\n__p+='";
-      }
-      index = offset + match.length;
-      return match;
-    });
-    source += "';\n";
-
-    // If a variable is not specified, place data values in local scope.
-    if (!settings.variable) source = 'with(obj||{}){\n' + source + '}\n';
-
-    source = "var __t,__p='',__j=Array.prototype.join," +
-      "print=function(){__p+=__j.call(arguments,'');};\n" +
-      source + "return __p;\n";
-
-    try {
-      render = new Function(settings.variable || 'obj', '_', source);
-    } catch (e) {
-      e.source = source;
-      throw e;
-    }
-
-    if (data) return render(data, _);
-    var template = function(data) {
-      return render.call(this, data, _);
-    };
-
-    // Provide the compiled function source as a convenience for precompilation.
-    template.source = 'function(' + (settings.variable || 'obj') + '){\n' + source + '}';
-
-    return template;
-  };
-
-  // Add a "chain" function, which will delegate to the wrapper.
-  _.chain = function(obj) {
-    return _(obj).chain();
-  };
-
-  // OOP
-  // ---------------
-  // If Underscore is called as a function, it returns a wrapped object that
-  // can be used OO-style. This wrapper holds altered versions of all the
-  // underscore functions. Wrapped objects may be chained.
-
-  // Helper function to continue chaining intermediate results.
-  var result = function(obj) {
-    return this._chain ? _(obj).chain() : obj;
-  };
-
-  // Add all of the Underscore functions to the wrapper object.
-  _.mixin(_);
-
-  // Add all mutator Array functions to the wrapper.
-  each(['pop', 'push', 'reverse', 'shift', 'sort', 'splice', 'unshift'], function(name) {
-    var method = ArrayProto[name];
-    _.prototype[name] = function() {
-      var obj = this._wrapped;
-      method.apply(obj, arguments);
-      if ((name == 'shift' || name == 'splice') && obj.length === 0) delete obj[0];
-      return result.call(this, obj);
-    };
-  });
-
-  // Add all accessor Array functions to the wrapper.
-  each(['concat', 'join', 'slice'], function(name) {
-    var method = ArrayProto[name];
-    _.prototype[name] = function() {
-      return result.call(this, method.apply(this._wrapped, arguments));
-    };
-  });
-
-  _.extend(_.prototype, {
-
-    // Start chaining a wrapped Underscore object.
-    chain: function() {
-      this._chain = true;
-      return this;
-    },
-
-    // Extracts the result from a wrapped and chained object.
-    value: function() {
-      return this._wrapped;
-    }
-
-  });
-
-  // AMD registration happens at the end for compatibility with AMD loaders
-  // that may not enforce next-turn semantics on modules. Even though general
-  // practice for AMD registration is to be anonymous, underscore registers
-  // as a named module because, like jQuery, it is a base library that is
-  // popular enough to be bundled in a third party lib, but not be part of
-  // an AMD load request. Those cases could generate an error when an
-  // anonymous define() is called outside of a loader request.
-  if (typeof define === 'function' && define.amd) {
-    define('underscore', [], function() {
-      return _;
-    });
-  }
-}).call(this);
-
-},{}],21:[function(require,module,exports){
-module.exports=require(20)
-},{}],22:[function(require,module,exports){
-
-},{}],23:[function(require,module,exports){
+},{}],2:[function(require,module,exports){
 // http://wiki.commonjs.org/wiki/Unit_Testing/1.0
 //
 // THIS IS NOT TESTED NOR LIKELY TO WORK OUTSIDE V8!
@@ -4340,14 +362,14 @@ var objectKeys = Object.keys || function (obj) {
   return keys;
 };
 
-},{"util/":25}],24:[function(require,module,exports){
+},{"util/":4}],3:[function(require,module,exports){
 module.exports = function isBuffer(arg) {
   return arg && typeof arg === 'object'
     && typeof arg.copy === 'function'
     && typeof arg.fill === 'function'
     && typeof arg.readUInt8 === 'function';
 }
-},{}],25:[function(require,module,exports){
+},{}],4:[function(require,module,exports){
 (function (process,global){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -4936,8 +958,8 @@ function hasOwnProperty(obj, prop) {
   return Object.prototype.hasOwnProperty.call(obj, prop);
 }
 
-}).call(this,require("XjyEta"),typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./support/isBuffer":24,"XjyEta":44,"inherits":43}],26:[function(require,module,exports){
+}).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{"./support/isBuffer":3,"_process":24,"inherits":22}],5:[function(require,module,exports){
 'use strict';
 
 
@@ -5040,7 +1062,7 @@ exports.setTyped = function (on) {
 };
 
 exports.setTyped(TYPED_OK);
-},{}],27:[function(require,module,exports){
+},{}],6:[function(require,module,exports){
 'use strict';
 
 // Note: adler32 takes 12% for level 0 and 2% for level 6.
@@ -5073,7 +1095,7 @@ function adler32(adler, buf, len, pos) {
 
 
 module.exports = adler32;
-},{}],28:[function(require,module,exports){
+},{}],7:[function(require,module,exports){
 module.exports = {
 
   /* Allowed flush values; see deflate() and inflate() below for details */
@@ -5121,7 +1143,7 @@ module.exports = {
   Z_DEFLATED:               8
   //Z_NULL:                 null // Use -1 or null inline, depending on var type
 };
-},{}],29:[function(require,module,exports){
+},{}],8:[function(require,module,exports){
 'use strict';
 
 // Note: we can't get significant speed boost here.
@@ -5163,7 +1185,7 @@ function crc32(crc, buf, len, pos) {
 
 
 module.exports = crc32;
-},{}],30:[function(require,module,exports){
+},{}],9:[function(require,module,exports){
 'use strict';
 
 var utils   = require('../utils/common');
@@ -6929,7 +2951,7 @@ exports.deflatePending = deflatePending;
 exports.deflatePrime = deflatePrime;
 exports.deflateTune = deflateTune;
 */
-},{"../utils/common":26,"./adler32":27,"./crc32":29,"./messages":34,"./trees":35}],31:[function(require,module,exports){
+},{"../utils/common":5,"./adler32":6,"./crc32":8,"./messages":13,"./trees":14}],10:[function(require,module,exports){
 'use strict';
 
 // See state defs from inflate.js
@@ -7256,7 +3278,7 @@ module.exports = function inflate_fast(strm, start) {
   return;
 };
 
-},{}],32:[function(require,module,exports){
+},{}],11:[function(require,module,exports){
 'use strict';
 
 
@@ -8760,7 +4782,7 @@ exports.inflateSync = inflateSync;
 exports.inflateSyncPoint = inflateSyncPoint;
 exports.inflateUndermine = inflateUndermine;
 */
-},{"../utils/common":26,"./adler32":27,"./crc32":29,"./inffast":31,"./inftrees":33}],33:[function(require,module,exports){
+},{"../utils/common":5,"./adler32":6,"./crc32":8,"./inffast":10,"./inftrees":12}],12:[function(require,module,exports){
 'use strict';
 
 
@@ -8954,19 +4976,18 @@ module.exports = function inflate_table(type, lens, lens_index, codes, table, ta
    */
 
   /* set up for code type */
-  switch (type) {
-    case CODES:
+  // poor man optimization - use if-else instead of switch,
+  // to avoid deopts in old v8
+  if (type === CODES) {
       base = extra = work;    /* dummy value--not used */
       end = 19;
-      break;
-    case LENS:
+  } else if (type === LENS) {
       base = lbase;
       base_index -= 257;
       extra = lext;
       extra_index -= 257;
       end = 256;
-      break;
-    default:            /* DISTS */
+  } else {                    /* DISTS */
       base = dbase;
       extra = dext;
       end = -1;
@@ -9031,7 +5052,7 @@ module.exports = function inflate_table(type, lens, lens_index, codes, table, ta
 
     /* go to next symbol, update count, len */
     sym++;
-    if (--(count[len]) === 0) {
+    if (--count[len] === 0) {
       if (len === max) { break; }
       len = lens[lens_index + work[sym]];
     }
@@ -9087,7 +5108,8 @@ module.exports = function inflate_table(type, lens, lens_index, codes, table, ta
   opts.bits = root;
   return 0;
 };
-},{"../utils/common":26}],34:[function(require,module,exports){
+
+},{"../utils/common":5}],13:[function(require,module,exports){
 'use strict';
 
 module.exports = {
@@ -9101,7 +5123,7 @@ module.exports = {
   '-5':   'buffer error',        /* Z_BUF_ERROR     (-5) */
   '-6':   'incompatible version' /* Z_VERSION_ERROR (-6) */
 };
-},{}],35:[function(require,module,exports){
+},{}],14:[function(require,module,exports){
 'use strict';
 
 
@@ -10301,7 +6323,7 @@ exports._tr_stored_block = _tr_stored_block;
 exports._tr_flush_block  = _tr_flush_block;
 exports._tr_tally = _tr_tally;
 exports._tr_align = _tr_align;
-},{"../utils/common":26}],36:[function(require,module,exports){
+},{"../utils/common":5}],15:[function(require,module,exports){
 'use strict';
 
 
@@ -10331,7 +6353,7 @@ function ZStream() {
 }
 
 module.exports = ZStream;
-},{}],37:[function(require,module,exports){
+},{}],16:[function(require,module,exports){
 (function (process,Buffer){
 var msg = require('pako/lib/zlib/messages');
 var zstream = require('pako/lib/zlib/zstream');
@@ -10570,8 +6592,8 @@ Zlib.prototype._error = function(status) {
 
 exports.Zlib = Zlib;
 
-}).call(this,require("XjyEta"),require("buffer").Buffer)
-},{"XjyEta":44,"buffer":39,"pako/lib/zlib/constants":28,"pako/lib/zlib/deflate.js":30,"pako/lib/zlib/inflate.js":32,"pako/lib/zlib/messages":34,"pako/lib/zlib/zstream":36}],38:[function(require,module,exports){
+}).call(this,require('_process'),require("buffer").Buffer)
+},{"_process":24,"buffer":18,"pako/lib/zlib/constants":7,"pako/lib/zlib/deflate.js":9,"pako/lib/zlib/inflate.js":11,"pako/lib/zlib/messages":13,"pako/lib/zlib/zstream":15}],17:[function(require,module,exports){
 (function (process,Buffer){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -11184,8 +7206,8 @@ util.inherits(DeflateRaw, Zlib);
 util.inherits(InflateRaw, Zlib);
 util.inherits(Unzip, Zlib);
 
-}).call(this,require("XjyEta"),require("buffer").Buffer)
-},{"./binding":37,"XjyEta":44,"_stream_transform":56,"assert":23,"buffer":39,"util":60}],39:[function(require,module,exports){
+}).call(this,require('_process'),require("buffer").Buffer)
+},{"./binding":16,"_process":24,"_stream_transform":35,"assert":2,"buffer":18,"util":39}],18:[function(require,module,exports){
 /*!
  * The buffer module from node.js, for the browser.
  *
@@ -11202,22 +7224,35 @@ exports.INSPECT_MAX_BYTES = 50
 Buffer.poolSize = 8192
 
 /**
- * If `Buffer._useTypedArrays`:
+ * If `TYPED_ARRAY_SUPPORT`:
  *   === true    Use Uint8Array implementation (fastest)
- *   === false   Use Object implementation (compatible down to IE6)
+ *   === false   Use Object implementation (most compatible, even IE6)
+ *
+ * Browsers that support typed arrays are IE 10+, Firefox 4+, Chrome 7+, Safari 5.1+,
+ * Opera 11.6+, iOS 4.2+.
+ *
+ * Note:
+ *
+ * - Implementation must support adding new properties to `Uint8Array` instances.
+ *   Firefox 4-29 lacked support, fixed in Firefox 30+.
+ *   See: https://bugzilla.mozilla.org/show_bug.cgi?id=695438.
+ *
+ *  - Chrome 9-10 is missing the `TypedArray.prototype.subarray` function.
+ *
+ *  - IE10 has a broken `TypedArray.prototype.subarray` function which returns arrays of
+ *    incorrect length in some situations.
+ *
+ * We detect these buggy browsers and set `TYPED_ARRAY_SUPPORT` to `false` so they will
+ * get the Object implementation, which is slower but will work correctly.
  */
-Buffer._useTypedArrays = (function () {
-  // Detect if browser supports Typed Arrays. Supported browsers are IE 10+, Firefox 4+,
-  // Chrome 7+, Safari 5.1+, Opera 11.6+, iOS 4.2+. If the browser does not support adding
-  // properties to `Uint8Array` instances, then that's the same as no `Uint8Array` support
-  // because we need to be able to add all the node Buffer API methods. This is an issue
-  // in Firefox 4-29. Now fixed: https://bugzilla.mozilla.org/show_bug.cgi?id=695438
+var TYPED_ARRAY_SUPPORT = (function () {
   try {
     var buf = new ArrayBuffer(0)
     var arr = new Uint8Array(buf)
     arr.foo = function () { return 42 }
-    return 42 === arr.foo() &&
-        typeof arr.subarray === 'function' // Chrome 9-10 lack `subarray`
+    return 42 === arr.foo() && // typed array instances can be augmented
+        typeof arr.subarray === 'function' && // chrome 9-10 lack `subarray`
+        new Uint8Array(1).subarray(1, 1).byteLength === 0 // ie10 has broken `subarray`
   } catch (e) {
     return false
   }
@@ -11241,23 +7276,23 @@ function Buffer (subject, encoding, noZero) {
 
   var type = typeof subject
 
-  if (encoding === 'base64' && type === 'string') {
-    subject = base64clean(subject)
-  }
-
   // Find the length
   var length
   if (type === 'number')
-    length = coerce(subject)
-  else if (type === 'string')
+    length = subject > 0 ? subject >>> 0 : 0
+  else if (type === 'string') {
+    if (encoding === 'base64')
+      subject = base64clean(subject)
     length = Buffer.byteLength(subject, encoding)
-  else if (type === 'object')
-    length = coerce(subject.length) // assume that object is array-like
-  else
+  } else if (type === 'object' && subject !== null) { // assume object is array-like
+    if (subject.type === 'Buffer' && isArray(subject.data))
+      subject = subject.data
+    length = +subject.length > 0 ? Math.floor(+subject.length) : 0
+  } else
     throw new Error('First argument needs to be a number, array or string.')
 
   var buf
-  if (Buffer._useTypedArrays) {
+  if (TYPED_ARRAY_SUPPORT) {
     // Preferred: Return an augmented `Uint8Array` instance for best performance
     buf = Buffer._augment(new Uint8Array(length))
   } else {
@@ -11268,7 +7303,7 @@ function Buffer (subject, encoding, noZero) {
   }
 
   var i
-  if (Buffer._useTypedArrays && typeof subject.byteLength === 'number') {
+  if (TYPED_ARRAY_SUPPORT && typeof subject.byteLength === 'number') {
     // Speed optimization -- use set if we're copying from a typed array
     buf._set(subject)
   } else if (isArrayish(subject)) {
@@ -11282,7 +7317,7 @@ function Buffer (subject, encoding, noZero) {
     }
   } else if (type === 'string') {
     buf.write(subject, 0, encoding)
-  } else if (type === 'number' && !Buffer._useTypedArrays && !noZero) {
+  } else if (type === 'number' && !TYPED_ARRAY_SUPPORT && !noZero) {
     for (i = 0; i < length; i++) {
       buf[i] = 0
     }
@@ -11314,7 +7349,7 @@ Buffer.isEncoding = function (encoding) {
 }
 
 Buffer.isBuffer = function (b) {
-  return !!(b !== null && b !== undefined && b._isBuffer)
+  return !!(b != null && b._isBuffer)
 }
 
 Buffer.byteLength = function (str, encoding) {
@@ -11589,7 +7624,7 @@ Buffer.prototype.copy = function (target, target_start, start, end) {
 
   var len = end - start
 
-  if (len < 100 || !Buffer._useTypedArrays) {
+  if (len < 100 || !TYPED_ARRAY_SUPPORT) {
     for (var i = 0; i < len; i++) {
       target[i + target_start] = this[i + start]
     }
@@ -11661,10 +7696,29 @@ function utf16leSlice (buf, start, end) {
 
 Buffer.prototype.slice = function (start, end) {
   var len = this.length
-  start = clamp(start, len, 0)
-  end = clamp(end, len, len)
+  start = ~~start
+  end = end === undefined ? len : ~~end
 
-  if (Buffer._useTypedArrays) {
+  if (start < 0) {
+    start += len;
+    if (start < 0)
+      start = 0
+  } else if (start > len) {
+    start = len
+  }
+
+  if (end < 0) {
+    end += len
+    if (end < 0)
+      end = 0
+  } else if (end > len) {
+    end = len
+  }
+
+  if (end < start)
+    end = start
+
+  if (TYPED_ARRAY_SUPPORT) {
     return Buffer._augment(this.subarray(start, end))
   } else {
     var sliceLen = end - start
@@ -12123,7 +8177,7 @@ Buffer.prototype.inspect = function () {
  */
 Buffer.prototype.toArrayBuffer = function () {
   if (typeof Uint8Array !== 'undefined') {
-    if (Buffer._useTypedArrays) {
+    if (TYPED_ARRAY_SUPPORT) {
       return (new Buffer(this)).buffer
     } else {
       var buf = new Uint8Array(this.length)
@@ -12214,25 +8268,6 @@ function base64clean (str) {
 function stringtrim (str) {
   if (str.trim) return str.trim()
   return str.replace(/^\s+|\s+$/g, '')
-}
-
-// slice(start, end)
-function clamp (index, len, defaultValue) {
-  if (typeof index !== 'number') return defaultValue
-  index = ~~index;  // Coerce to integer.
-  if (index >= len) return len
-  if (index >= 0) return index
-  index += len
-  if (index >= 0) return index
-  return 0
-}
-
-function coerce (length) {
-  // Coerce length to a number (possibly NaN), round up
-  // in case it's fractional (e.g. 123.456) then do a
-  // double negate to coerce a NaN to 0. Easy, right?
-  length = ~~Math.ceil(+length)
-  return length < 0 ? 0 : length
 }
 
 function isArray (subject) {
@@ -12343,7 +8378,7 @@ function assert (test, message) {
   if (!test) throw new Error(message || 'Failed assertion')
 }
 
-},{"base64-js":40,"ieee754":41}],40:[function(require,module,exports){
+},{"base64-js":19,"ieee754":20}],19:[function(require,module,exports){
 var lookup = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
 ;(function (exports) {
@@ -12465,7 +8500,7 @@ var lookup = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 	exports.fromByteArray = uint8ToBase64
 }(typeof exports === 'undefined' ? (this.base64js = {}) : exports))
 
-},{}],41:[function(require,module,exports){
+},{}],20:[function(require,module,exports){
 exports.read = function(buffer, offset, isLE, mLen, nBytes) {
   var e, m,
       eLen = nBytes * 8 - mLen - 1,
@@ -12551,7 +8586,7 @@ exports.write = function(buffer, value, offset, isLE, mLen, nBytes) {
   buffer[offset + i - d] |= s * 128;
 };
 
-},{}],42:[function(require,module,exports){
+},{}],21:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -12856,7 +8891,7 @@ function isUndefined(arg) {
   return arg === void 0;
 }
 
-},{}],43:[function(require,module,exports){
+},{}],22:[function(require,module,exports){
 if (typeof Object.create === 'function') {
   // implementation from standard node.js 'util' module
   module.exports = function inherits(ctor, superCtor) {
@@ -12881,7 +8916,12 @@ if (typeof Object.create === 'function') {
   }
 }
 
-},{}],44:[function(require,module,exports){
+},{}],23:[function(require,module,exports){
+module.exports = Array.isArray || function (arr) {
+  return Object.prototype.toString.call(arr) == '[object Array]';
+};
+
+},{}],24:[function(require,module,exports){
 // shim for using process in browser
 
 var process = module.exports = {};
@@ -12946,10 +8986,10 @@ process.chdir = function (dir) {
     throw new Error('process.chdir is not supported');
 };
 
-},{}],45:[function(require,module,exports){
+},{}],25:[function(require,module,exports){
 module.exports = require("./lib/_stream_duplex.js")
 
-},{"./lib/_stream_duplex.js":46}],46:[function(require,module,exports){
+},{"./lib/_stream_duplex.js":26}],26:[function(require,module,exports){
 (function (process){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -13041,8 +9081,8 @@ function forEach (xs, f) {
   }
 }
 
-}).call(this,require("XjyEta"))
-},{"./_stream_readable":48,"./_stream_writable":50,"XjyEta":44,"core-util-is":51,"inherits":43}],47:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./_stream_readable":28,"./_stream_writable":30,"_process":24,"core-util-is":31,"inherits":22}],27:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -13090,7 +9130,7 @@ PassThrough.prototype._transform = function(chunk, encoding, cb) {
   cb(null, chunk);
 };
 
-},{"./_stream_transform":49,"core-util-is":51,"inherits":43}],48:[function(require,module,exports){
+},{"./_stream_transform":29,"core-util-is":31,"inherits":22}],28:[function(require,module,exports){
 (function (process){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -13334,7 +9374,7 @@ function howMuchToRead(n, state) {
   if (state.objectMode)
     return n === 0 ? 0 : 1;
 
-  if (isNaN(n) || n === null) {
+  if (n === null || isNaN(n)) {
     // only flow one buffer at a time
     if (state.flowing && state.buffer.length)
       return state.buffer[0].length;
@@ -13369,6 +9409,7 @@ Readable.prototype.read = function(n) {
   var state = this._readableState;
   state.calledRead = true;
   var nOrig = n;
+  var ret;
 
   if (typeof n !== 'number' || n > 0)
     state.emittedReadable = false;
@@ -13387,9 +9428,28 @@ Readable.prototype.read = function(n) {
 
   // if we've ended, and we're now clear, then finish it up.
   if (n === 0 && state.ended) {
+    ret = null;
+
+    // In cases where the decoder did not receive enough data
+    // to produce a full chunk, then immediately received an
+    // EOF, state.buffer will contain [<Buffer >, <Buffer 00 ...>].
+    // howMuchToRead will see this and coerce the amount to
+    // read to zero (because it's looking at the length of the
+    // first <Buffer > in state.buffer), and we'll end up here.
+    //
+    // This can only happen via state.decoder -- no other venue
+    // exists for pushing a zero-length chunk into state.buffer
+    // and triggering this behavior. In this case, we return our
+    // remaining data and end the stream, if appropriate.
+    if (state.length > 0 && state.decoder) {
+      ret = fromList(n, state);
+      state.length -= ret.length;
+    }
+
     if (state.length === 0)
       endReadable(this);
-    return null;
+
+    return ret;
   }
 
   // All the actual chunk generation logic needs to be
@@ -13443,7 +9503,6 @@ Readable.prototype.read = function(n) {
   if (doRead && !state.reading)
     n = howMuchToRead(nOrig, state);
 
-  var ret;
   if (n > 0)
     ret = fromList(n, state);
   else
@@ -13476,8 +9535,7 @@ function chunkInvalid(state, chunk) {
       'string' !== typeof chunk &&
       chunk !== null &&
       chunk !== undefined &&
-      !state.objectMode &&
-      !er) {
+      !state.objectMode) {
     er = new TypeError('Invalid non-string/buffer chunk');
   }
   return er;
@@ -13908,7 +9966,12 @@ Readable.prototype.wrap = function(stream) {
   stream.on('data', function(chunk) {
     if (state.decoder)
       chunk = state.decoder.write(chunk);
-    if (!chunk || !state.objectMode && !chunk.length)
+
+    // don't skip over falsy values in objectMode
+    //if (state.objectMode && util.isNullOrUndefined(chunk))
+    if (state.objectMode && (chunk === null || chunk === undefined))
+      return;
+    else if (!state.objectMode && (!chunk || !chunk.length))
       return;
 
     var ret = self.push(chunk);
@@ -14052,8 +10115,8 @@ function indexOf (xs, x) {
   return -1;
 }
 
-}).call(this,require("XjyEta"))
-},{"XjyEta":44,"buffer":39,"core-util-is":51,"events":42,"inherits":43,"isarray":52,"stream":58,"string_decoder/":53}],49:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"_process":24,"buffer":18,"core-util-is":31,"events":21,"inherits":22,"isarray":23,"stream":37,"string_decoder/":32}],29:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -14265,7 +10328,7 @@ function done(stream, er) {
   return stream.push(null);
 }
 
-},{"./_stream_duplex":46,"core-util-is":51,"inherits":43}],50:[function(require,module,exports){
+},{"./_stream_duplex":26,"core-util-is":31,"inherits":22}],30:[function(require,module,exports){
 (function (process){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -14305,7 +10368,6 @@ Writable.WritableState = WritableState;
 var util = require('core-util-is');
 util.inherits = require('inherits');
 /*</replacement>*/
-
 
 var Stream = require('stream');
 
@@ -14655,8 +10717,8 @@ function endWritable(stream, state, cb) {
   state.ended = true;
 }
 
-}).call(this,require("XjyEta"))
-},{"./_stream_duplex":46,"XjyEta":44,"buffer":39,"core-util-is":51,"inherits":43,"stream":58}],51:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./_stream_duplex":26,"_process":24,"buffer":18,"core-util-is":31,"inherits":22,"stream":37}],31:[function(require,module,exports){
 (function (Buffer){
 // Copyright Joyent, Inc. and other Node contributors.
 //
@@ -14766,12 +10828,7 @@ function objectToString(o) {
   return Object.prototype.toString.call(o);
 }
 }).call(this,require("buffer").Buffer)
-},{"buffer":39}],52:[function(require,module,exports){
-module.exports = Array.isArray || function (arr) {
-  return Object.prototype.toString.call(arr) == '[object Array]';
-};
-
-},{}],53:[function(require,module,exports){
+},{"buffer":18}],32:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -14973,10 +11030,10 @@ function base64DetectIncompleteChar(buffer) {
   return incomplete;
 }
 
-},{"buffer":39}],54:[function(require,module,exports){
+},{"buffer":18}],33:[function(require,module,exports){
 module.exports = require("./lib/_stream_passthrough.js")
 
-},{"./lib/_stream_passthrough.js":47}],55:[function(require,module,exports){
+},{"./lib/_stream_passthrough.js":27}],34:[function(require,module,exports){
 exports = module.exports = require('./lib/_stream_readable.js');
 exports.Readable = exports;
 exports.Writable = require('./lib/_stream_writable.js');
@@ -14984,13 +11041,13 @@ exports.Duplex = require('./lib/_stream_duplex.js');
 exports.Transform = require('./lib/_stream_transform.js');
 exports.PassThrough = require('./lib/_stream_passthrough.js');
 
-},{"./lib/_stream_duplex.js":46,"./lib/_stream_passthrough.js":47,"./lib/_stream_readable.js":48,"./lib/_stream_transform.js":49,"./lib/_stream_writable.js":50}],56:[function(require,module,exports){
+},{"./lib/_stream_duplex.js":26,"./lib/_stream_passthrough.js":27,"./lib/_stream_readable.js":28,"./lib/_stream_transform.js":29,"./lib/_stream_writable.js":30}],35:[function(require,module,exports){
 module.exports = require("./lib/_stream_transform.js")
 
-},{"./lib/_stream_transform.js":49}],57:[function(require,module,exports){
+},{"./lib/_stream_transform.js":29}],36:[function(require,module,exports){
 module.exports = require("./lib/_stream_writable.js")
 
-},{"./lib/_stream_writable.js":50}],58:[function(require,module,exports){
+},{"./lib/_stream_writable.js":30}],37:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -15119,8 +11176,4035 @@ Stream.prototype.pipe = function(dest, options) {
   return dest;
 };
 
-},{"events":42,"inherits":43,"readable-stream/duplex.js":45,"readable-stream/passthrough.js":54,"readable-stream/readable.js":55,"readable-stream/transform.js":56,"readable-stream/writable.js":57}],59:[function(require,module,exports){
-module.exports=require(24)
-},{}],60:[function(require,module,exports){
-module.exports=require(25)
-},{"./support/isBuffer":59,"XjyEta":44,"inherits":43}]},{},[1])
+},{"events":21,"inherits":22,"readable-stream/duplex.js":25,"readable-stream/passthrough.js":33,"readable-stream/readable.js":34,"readable-stream/transform.js":35,"readable-stream/writable.js":36}],38:[function(require,module,exports){
+module.exports=require(3)
+},{}],39:[function(require,module,exports){
+module.exports=require(4)
+},{"./support/isBuffer":38,"_process":24,"inherits":22}],40:[function(require,module,exports){
+
+
+exports.RedmineImporter = require("./lib/import/redmine_importer").RedmineImporter;
+exports.build_time_line = require("./lib/timeline").build_time_line;
+exports.statistics   = require("./lib/kanbanstatistics").statistics;
+exports.Today        = require("./lib/today").Today;
+exports.WorkItem     = require("./lib/workitem").WorkItem;
+exports.Project      = require("./lib/project").Project;
+exports.get_projet_names = require("./lib/workitem_utils").get_projet_names;
+exports.get_start_date = require("./lib/workitem_utils").get_start_date;
+exports.get_last_updated_date = require("./lib/workitem_utils").get_last_updated_date;
+exports.dateToYMD = require("./lib/utils").dateToYMD;
+exports.dump_use_cases = require("./lib/dump_workitems").dump_use_cases;
+exports.throughput_progression  =require("./lib/kanban_kpi/throughput_progression").throughput_progression;
+exports.calculate_progression   =require("./lib/kanbanstatistics").calculate_progression;
+exports.average_lead_time_progression =require("./lib/kanbanstatistics").average_lead_time_progression;
+exports.statistics = require("./lib/kanbanstatistics").statistics;
+
+
+exports.dump_user_story = require("./lib/dump_workitems").dump_user_story;
+
+
+},{"./lib/dump_workitems":42,"./lib/import/redmine_importer":44,"./lib/kanban_kpi/throughput_progression":47,"./lib/kanbanstatistics":50,"./lib/project":51,"./lib/timeline":52,"./lib/today":53,"./lib/utils":54,"./lib/workitem":55,"./lib/workitem_utils":56}],41:[function(require,module,exports){
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+"use strict";
+
+var HashMap = require("./hashmap").HashMap;
+var WorkItem = require("./workitem").WorkItem;
+var tl = require('./timeline');
+var assert = require("assert");
+
+var Project = require("./project").Project;
+
+var calculate_defects_statistics = require("./kanban_kpi/calculate_workitem_statistics.js").calculate_defects_statistics;
+var calculate_use_case_statistics = require("./kanban_kpi/calculate_workitem_statistics.js").calculate_use_case_statistics;
+var calculate_user_story_statistics = require("./kanban_kpi/calculate_workitem_statistics.js").calculate_user_story_statistics;
+
+Project.prototype.associate_use_case_and_user_stories = function() {
+
+    var self = this;
+
+    var ticket_map = new HashMap();
+
+    // construct ticket map
+    self._work_items.forEach(function(ticket){ ticket_map.set(ticket.id, ticket); });
+
+    function add_workitem(workitem) {
+        self.add_work_item(workitem);
+        ticket_map.set(workitem.id,workitem);
+    }
+    /**
+     * get the special Use case used as the parent of the unattached user stories
+     * @returns {WorkItem}
+     */
+    function get_floating_use_case() {
+
+        var uc =ticket_map.get("floating-UC");
+
+        if (!uc) {
+            uc = new WorkItem({
+                id: "floating-UC",
+                type: "U-C",
+                current_status: "YYY",
+                subject:" Use Case for unattached user stories",
+                parent_id: "noparent"
+            });
+            add_workitem(uc);
+        }
+        return uc;
+    }
+
+    /**
+     * get the parent use case work item of the given work item
+     * @param ticket
+     * @returns {WorkItem}
+     */
+    function get_or_create_use_case_for_user_story(ticket) {
+        assert(ticket.type === "U-S");
+        var uc = ticket_map.get(ticket.parent_id);
+        if (!uc) {
+            uc = get_floating_use_case();
+        }
+        return uc;
+    }
+
+    function get_floating_user_story() {
+
+        var us = ticket_map.get("floating")
+        if (!us) {
+            var floating_use_case = get_floating_use_case();
+
+            us = new WorkItem({
+                id: "floating",
+                type: "U-S",
+                parent_id: floating_use_case.id,
+                current_status: "New",
+                subject: "floating user story for unattached defects",
+                fixed_version: "Bugs"
+            });
+
+            add_workitem(us);
+            floating_use_case.children.push(us);
+        }
+        assert( us instanceof WorkItem);
+        return us;
+    }
+
+    function get_or_create_user_story_for_defect(ticket) {
+
+        var p = ticket.parent_id;
+
+        if (p === "noparent") {
+
+            ticket.relations.forEach(function (relation_id) {
+                var related_ticket = ticket_map.get(relation_id);
+                if (related_ticket.type === "U-S") {
+                    ticket.parent_id = relation_id;
+                    return us;
+                }
+                if (related_ticket.type === "U-C") {
+                    // l'anomalie est rattachée à une UC par relation
+                }
+            });
+        }
+        var parent_ticket = ticket_map.get(ticket.parent_id);
+        if (!parent_ticket) {
+            parent_ticket = get_floating_user_story();
+        }
+        assert( parent_ticket instanceof WorkItem);
+        return parent_ticket;
+    }
+
+    function attach_user_story_to_use_case(ticket) {
+        var uc = get_or_create_use_case_for_user_story(ticket);
+        uc.children.push(ticket);
+    }
+
+    function attach_defect_to_user_story(ticket) {
+        var us = get_or_create_user_story_for_defect(ticket);
+        us.defects.push(ticket);
+    }
+    function attach_use_case_to_use_case(ticket) {
+        var p = ticket_map.get(ticket.parent_id);
+        if (p) {
+            p.children.push(ticket);
+        }
+    }
+
+    self.use_cases.forEach(attach_use_case_to_use_case);
+
+    // attach user stories to use cases
+    self.user_stories.forEach(attach_user_story_to_use_case);
+
+    // attach defect to user stories
+    self.defects.forEach(attach_defect_to_user_story);
+
+    self.use_cases.forEach(function (ticket) {
+        ticket.stats = calculate_use_case_statistics(ticket);
+    });
+
+    self.user_stories.forEach(function (ticket) {
+        ticket.stats = calculate_user_story_statistics(ticket);
+    });
+
+    return self.top_level_use_cases;
+};
+
+},{"./hashmap":43,"./kanban_kpi/calculate_workitem_statistics.js":45,"./project":51,"./timeline":52,"./workitem":55,"assert":2}],42:[function(require,module,exports){
+var assert=require("assert");
+var tl = require('./timeline');
+
+var ellipsys = require("./utils").ellipsys;
+var Project = require("./project").Project;
+function w(str,width) {
+    return ("" + str + "                         ").substr(0,width);
+}
+
+
+function dump_user_story(level,us,timeline) {
+
+    var ret = us.progress_bar(timeline);
+    console.warn("  ", us.type, "   ", w(us.current_status,3), w(us.id,5),  us.unplanned ? "??" : "  ", ret, ellipsys(us.subject, 40),us.fixed_version,us.current_status);
+    us.defects.forEach(function (bug) {
+        var ret = bug.progress_bar(timeline);
+        if (bug.current_status === "Done") {
+            console.warn("   ok ", bug.type, w(bug.current_status,3), w(bug.id,5), bug.unplanned ? "??" : "  ", ret, ellipsys(bug.subject, 40));
+        } else {
+            console.warn("    !!", bug.type, w(bug.current_status,3), w(bug.id,5), bug.unplanned ? "??" : "  ", ret, ellipsys(bug.subject, 40));
+        }
+    });
+
+}
+
+/**
+ *
+ * @param uc {WorkItem} a use case.
+ * @poram
+ */
+function dump_use_case(level,uc,timeline) {
+
+  console.warn( level + "Use case : ", w(uc.id,5), w(uc.percent_done(),3)+"%", uc.subject);
+
+  uc.use_cases.forEach(function (child_uc) {
+      dump_use_case(level + "  ",child_uc,timeline);
+  });
+
+  uc.user_stories.forEach(function (us) {
+      dump_user_story(level,us,timeline);
+  });
+}
+
+require("./associate_use_case_and_user_stories");
+function dump_use_cases(project,startDate,endDate,today) {
+    "use strict";
+    assert(project instanceof Project);
+    assert(startDate);
+    assert(endDate);
+    assert(today);
+
+    console.log(" start date = ", startDate);
+    console.log(" end date   = ", endDate);
+    console.log(" today      = ", today);
+    var use_cases = project.associate_use_case_and_user_stories();
+    assert(startDate !== null);
+
+    startDate = new Date(startDate);
+    endDate =   new Date(endDate);
+    today   = new Date(today);
+    var timeline = tl.build_time_line(startDate,today);
+
+    var level = " ";
+    use_cases.forEach(function (uc) {   dump_use_case(level,uc,timeline);   });
+}
+exports.dump_use_cases= dump_use_cases;
+exports.dump_user_story= dump_user_story;
+},{"./associate_use_case_and_user_stories":41,"./project":51,"./timeline":52,"./utils":54,"assert":2}],43:[function(require,module,exports){
+
+// module.exports =  require("harmony-collections");
+
+
+
+function HashMap(iteratable) {
+
+   // TODO __defineGetter : length as a readonly property
+   Object.defineProperty(this,"length", { get: function(){return this.size(); },  enumerable: false });
+
+   this._internal = {};
+   if (iteratable) {
+        for (v in iteratable) { this.set(v,iteratable[v]);  }
+}
+}
+
+HashMap.prototype.set = function(key, value) {
+  "use strict";
+  this._internal[key] = value;
+};
+
+HashMap.prototype.has = function(key) {
+    return typeof this._internal[key] === 'undefined' ? false: true;
+};
+
+/**
+ * Returns the value associated to the key, or undefined if there is none.
+ */
+HashMap.prototype.get = function(key) {
+  "use strict";
+  return this._internal[key];
+};
+
+HashMap.prototype.size = function() {
+  "use strict";
+  var count = 0;
+  for (var prop in this._internal) {
+    if(this._internal.hasOwnProperty(prop)) {
+      count++;
+    }
+  }
+  return count;
+};
+
+HashMap.prototype.forEach = function(func) {
+  "use strict";
+  for (var prop in this._internal) {
+    if(this._internal.hasOwnProperty(prop)) {
+      func(this._internal[prop],prop);
+    }
+  }
+};
+
+exports.HashMap = HashMap;
+
+
+},{}],44:[function(require,module,exports){
+/**
+ *
+ * @constructor
+ */
+function RedmineImporter(){
+
+}
+RedmineImporter.prototype.foo = function()
+{
+
+}
+
+exports.RedmineImporter = RedmineImporter;
+
+},{}],45:[function(require,module,exports){
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+var WorkItem = require("../workitem").WorkItem;
+var assert = require("assert");
+
+function calculate_defects_statistics(work_item) {
+  "use strict";
+  assert(work_item instanceof WorkItem);
+  var ret = {};
+  ret.nb_defects = 0;
+  ret.nb_defects_done = 0;
+  ret.nb_defects_planned = 0;
+  ret.nb_defects_unplanned = 0;
+  if (!work_item.defects) return ret;
+
+  work_item.defects.forEach(function (defect) {
+
+    ret.nb_defects++;
+
+    if (defect.unplanned) {
+      ret.nb_defects_unplanned++;
+    } else {
+      if (defect.is_done()) {
+        ret.nb_defects_done++;
+      } else {
+        ret.nb_defects_planned++;
+      }
+    }
+  });
+
+  return ret;
+}
+
+function calculate_user_story_statistics(user_story) {
+  "use strict";
+  return calculate_defects_statistics(user_story);
+}
+
+
+/**
+ * @deprecated
+ * @param use_case
+ * @returns {{}}
+ */
+function calculate_use_case_statistics(use_case) {
+
+  "use strict";
+  assert(use_case instanceof WorkItem);
+
+  // unplanned user stories are ignored
+
+  var ret = {
+    consolidated_percent_done: 0,
+    nb_user_stories :0,
+    nb_user_stories_planned: 0,
+    nb_user_stories_unplanned:  0,
+    nb_user_stories_done: 0,
+    nb_defects: 0, // nb defects
+    nb_defects_done: 0,
+    nb_defects_planned: 0,
+    nb_defects_unplanned: 0,
+  };
+
+
+  var own_stat = calculate_defects_statistics(use_case);
+
+  ret.nb_defects           += own_stat.nb_defects;
+  ret.nb_defects_done      += own_stat.nb_defects_done;
+  ret.nb_defects_planned   += own_stat.nb_defects_planned;
+  ret.nb_defects_unplanned += own_stat.nb_defects_unplanned;
+
+  use_case.children.forEach(function (us) {
+    ret.nb_user_stories++;
+
+    if (us.unplanned) {
+      // console.warn(" UNPLANNED US ",us.unplanned,us.fixed_version);
+      ret.nb_user_stories_unplanned++;
+
+    } else {
+
+      var stat_us = calculate_defects_statistics(us);
+      ret.nb_defects += stat_us.nb_defects;
+      ret.nb_defects_done += stat_us.nb_defects_done;
+      ret.nb_defects_planned += stat_us.nb_defects_planned;
+      ret.nb_defects_unplanned += stat_us.nb_defects_unplanned;
+
+      if (us.is_done()) {
+        ret.nb_user_stories_done++;
+      } else {
+        ret.nb_user_stories_planned++;
+      }
+    }
+  });
+  assert.equal(ret.nb_user_stories, use_case.children.length);
+  assert.equal(ret.nb_user_stories,
+      ret.nb_user_stories_unplanned + ret.nb_user_stories_done + ret.nb_user_stories_planned);
+
+  return ret;
+}
+
+
+exports.calculate_use_case_statistics = calculate_use_case_statistics;
+exports.calculate_defects_statistics = calculate_defects_statistics;
+exports.calculate_user_story_statistics = calculate_user_story_statistics;
+
+
+},{"../workitem":55,"assert":2}],46:[function(require,module,exports){
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+var _ = require("underscore");
+
+function filter_tickets_for_average_lead_time_calculation(tickets, pivot_date, width) {
+
+  "use strict";
+  if (width <= 1) width = 2;
+
+  // width is in Business days
+  var low_date = pivot_date.removeBusinessDay(width / 2);
+
+  var high_date = pivot_date.addBusinessDay(width / 2);
+
+  //        L  p  H
+  //        |  |  |
+  // XXX    |  |  |         KO  (a)
+  //        |  |  |  XXX    KO  (b)
+  // ......X|XXyXX|X......  OK  (c)
+  // ......X|XXyX.|.......  OK  (c)
+  // .......|.XyXX|XXXXXX.  OK  (c)
+  // .......|.XyXX|XXXXXXX  KO  (d)
+
+
+  return tickets.filter(function (ticket) {
+
+    if (ticket.unplanned) {
+      return false;
+    }
+    if (ticket.current_status !== "Done") { // (case d)
+      // now we consider that undone ticket can be used to calculate lead time
+      // BEFORE => return false; // cannot be used to calculate lead time
+    }
+    // filter out tickets that don't exist at pivot date
+    if (ticket.created_on > high_date) { // (case b)
+      return false;
+    }
+    // filter out tickets that are not yet started at end date
+    var status_at_high_date = ticket.find_status_at_date(high_date);
+    if (status_at_high_date === "unknown") { // (case b)
+      return false;
+    }
+
+    // filter out tickets that are already completed at low date
+    var start_status = ticket.find_status_at_date(low_date);
+    if (start_status === "Done") { // case a
+      return false;
+    }
+    // take into account case c,c,c
+    return true;
+  });
+}
+
+
+function calculate_average_lead_time(tickets, pivot_date, width) {
+  "use strict";
+  var arr = filter_tickets_for_average_lead_time_calculation(tickets, pivot_date, width);
+
+  if (arr.length === 0) {
+    return  {
+      min_value: 0,
+      average: 0,
+      max_value: 0,
+      std_deviation: 0,
+      count: 0
+    };
+  }
+
+  var values = arr.map(function (element) {
+    return element.calculate_lead_time(pivot_date);
+  });
+
+  values = values.filter(function (element) {
+    return element !== undefined;
+  });
+
+  // extract the minimum lead time
+  var min_val = values.reduce(function (previousValue, currentValue, index, array) {
+    return (currentValue < previousValue) ? currentValue : previousValue;
+  }, values[0]);
+
+
+  // extract the greatest lead time
+  var max_val = values.reduce(function (previousValue, currentValue, index, array) {
+    return (currentValue > previousValue) ? currentValue : previousValue;
+  }, values[0]);
+
+  var sum = values.reduce(function (previousValue, currentValue) {
+    return previousValue + currentValue;
+  }, 0);
+
+  var n = arr.length;
+  var average = sum / n;
+
+  var variance = values.reduce(function (sum, value) {
+    var a = (value - average);
+    return sum + (a * a) / (n - 1);
+  }, 0);
+
+  var std_deviation = Math.sqrt(variance);
+
+  var ret = {
+    min_value: min_val,
+    average: Math.round(average * 10) / 10,
+    max_value: max_val,
+    std_deviation: std_deviation,
+    count: arr.length
+  };
+//   console.warn(ret);
+  return ret;
+}
+exports.calculate_average_lead_time = calculate_average_lead_time;
+
+function lead_time_KPI(tickets, endDate) {
+  var lead_time = calculate_average_lead_time(tickets, endDate, 20);
+  return  Math.round(lead_time.average * 100) / 100;
+}
+exports.lead_time_KPI = lead_time_KPI;
+},{"underscore":59}],47:[function(require,module,exports){
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+var assert = require("assert");
+var _ = require("underscore");
+var HashMap = require("../hashmap").HashMap;
+var calculate_wip = require("./work_in_progress").calculate_wip;
+
+/**
+ *
+ * @param tickets {Array<WorkItem>} the workitem to extract statistics from
+ * @param timeline {Array<Date>}  the coresponding timeline
+ * @param width
+ * @returns {HashMap}
+ */
+function throughput_progression(tickets, timeline, width) {
+
+    "use strict";
+
+    assert(_.isArray(tickets));
+    assert(_.isArray(timeline));
+
+    var wip_new_array = timeline.map(function (date) {
+        return calculate_wip(tickets, date);
+    });
+    var throughput = new HashMap();
+    throughput['through_in'] = {name: "Through In", type: 'number', data: []};
+    throughput['through_out'] = {name: "Through Out", type: 'number', data: []};
+
+    wip_new_array.forEach(function (e, index, array) {
+
+        if (index <= width) {
+            throughput.through_in.data.push(0);
+            throughput.through_out.data.push(0);
+            return;
+        }
+        var eb = array[index - width];
+        var wip_new_before = eb.planned + eb.in_progress + eb.done;
+        var wip_new_current = e.planned + e.in_progress + e.done;
+        var done_current = e.done;
+        var done_before = eb.done;
+
+        throughput.through_in.data.push(wip_new_current - wip_new_before);
+        throughput.through_out.data.push(done_current - done_before);
+    });
+
+    // average per day
+    throughput.through_in.data = throughput.through_in.data.map(function (e) {
+        return e / width;
+    });
+    throughput.through_out.data = throughput.through_out.data.map(function (e) {
+        return e / width;
+    });
+    return throughput;
+}
+
+exports.throughput_progression = throughput_progression;
+},{"../hashmap":43,"./work_in_progress":49,"assert":2,"underscore":59}],48:[function(require,module,exports){
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+var assert=require("assert");
+var _ = require("underscore");
+var tl = require("../timeline");
+
+var throughput_progression = require("./throughput_progression").throughput_progression;
+/**
+ *
+ * @param tickets {Array<WorkItem>}
+ * @param endDate {Date}
+ * @returns {number}
+ */
+function velocity_KPI(tickets, endDate) {
+
+  "use strict";
+  assert(_.isArray(tickets));
+
+  var startDate = new Date(endDate);
+
+  startDate = endDate.removeBusinessDay(40);
+
+  console.warn(" Start Date", startDate);
+  console.warn(" End Date " , endDate);
+
+  var timeline =   tl.build_time_line(startDate, endDate);
+  var throughput = throughput_progression(tickets, timeline, 20);
+
+
+  // method 1  : we use an averaged velocity
+  var a1 = throughput.through_out.data.reduce(function (sum, a) {
+    return sum + a;
+  });
+  var c1 = throughput.through_out.data.reduce(function (sum, a) {
+    return (a !== 0) ? sum + 1 : sum;
+  });
+  var velocity1 = a1 / c1;
+
+  // method 2 : we use the most recent velocity
+  var velocity2 = throughput.through_out.data[throughput.through_out.data.length - 1];
+
+  var velocity = (velocity2 < velocity1) ? velocity1 : velocity2;
+
+  var retValue = Math.round(velocity * 100) / 100;
+  if (retValue == 0.0) {
+    retValue = 0.01;
+  }
+  return retValue;
+}
+exports.velocity_KPI = velocity_KPI;
+},{"../timeline":52,"./throughput_progression":47,"assert":2,"underscore":59}],49:[function(require,module,exports){
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+var assert = require("assert");
+var _ = require("underscore");
+
+/**
+ * given a series of ticket and a date , returns the work in progress
+ *
+ * @param tickets {Array<WorkItem>
+ * @param date {Date}
+ * @returns {Object|*}  a structure containing the number of proposed, planned, in progress, and done ticket at Date.
+ */
+function calculate_wip(tickets, date) {
+
+    "use strict";
+
+    assert(_.isArray(tickets));
+    assert(date instanceof Date);
+
+    return tickets.reduce(function (pv, current_ticket /*, index, array*/) {
+
+        var status = current_ticket.find_status_at_date(date);
+
+        if (status === "unknown") {
+           // skip
+        } else if (status === "unplanned") {
+            pv.proposed += 1;
+        } else  if (status === "New") {
+            pv.planned += 1;
+        } else if (status === "In Progress") {
+            pv.in_progress += 1;
+        } else if (status === "Done") {
+            pv.done += 1;
+        } else {
+            throw new Error("Unknwon status " +  status);
+        }
+        return pv;
+    }, { date: date, proposed: 0, planned: 0, in_progress: 0, done: 0 });
+}
+exports.calculate_wip = calculate_wip;
+
+},{"assert":2,"underscore":59}],50:[function(require,module,exports){
+/*global require*/
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+/**
+ *
+ */
+
+var assert = require("assert");
+var _ = require('underscore');
+
+var WorkItem = require("./workitem").WorkItem;
+var tl = require('./timeline');
+var Today = require("./today").Today;
+
+
+var calculate_wip = require("./kanban_kpi/work_in_progress").calculate_wip;
+var throughput_progression = require("./kanban_kpi/throughput_progression").throughput_progression;
+var calculate_average_lead_time = require("./kanban_kpi/lead_time").calculate_average_lead_time;
+var lead_time_KPI =  require("./kanban_kpi/lead_time").lead_time_KPI;
+var velocity_KPI =require("./kanban_kpi/velocity").velocity_KPI;
+
+function is_one_of(value, array_of_values) {
+    return ( array_of_values.indexOf(value) > -1);
+}
+
+
+/**
+ *
+ * Providing a timeline array  ( array of date ) and a function that
+ * takes a date as an argument and returns any arbitrary object of the
+ * form { field1: <some value>, field2: <some value>, ...}
+ * this function returns a object with can be easily handled
+ * by most graph api and looks like this:
+ *
+ * {
+ *   {  name: "field1", 
+ *      type: "number",
+ *      data: [ 0.123 , .... ,12340] // one data per date
+ *   },
+ *   {  name: "field1", 
+ *      type: "number",
+ *      data: [ 0.123 , .... ,12340] // some data value
+ *   }
+ * }
+ *
+ * functor must return a object with properties to vectorize
+ */
+
+function produce_multi_array(timeline, functor) {
+    "use strict";
+
+    assert(_.isArray(timeline));
+    assert(_.isFunction(functor));
+
+    var res = {};
+    //  res.timeline = { name: 'timeline', type: 'date', data: timeline};
+    timeline.forEach(function (date) {
+        var obj = functor(date);
+        for (var property in obj) {
+            if (obj.hasOwnProperty(property)) {
+                if (!res[property]) {
+                    res[property] = {name: property, type: 'number', data: []};
+                }
+                res[property].data.push(obj[property]);
+            }
+        }
+    });
+    return res;
+}
+
+/**
+ */
+function average_lead_time_progression(tickets, timeline, width) {
+    "use strict";
+    assert(timeline.constructor === Date || timeline.constructor === Array);
+    if (timeline.constructor === Date) {
+        return calculate_average_lead_time(tickets, timeline, width);
+    }
+    return produce_multi_array(timeline, function (date) {
+        return calculate_average_lead_time(tickets, date, width);
+    });
+}
+
+
+function average_wip_progression(tickets, timeline, width) {
+    "use strict";
+    var progression = produce_multi_array(timeline, function (date) {
+        return calculate_wip(tickets, date);
+    });
+
+    return timeline.map(function (date, i) {
+        return  progression.planned.data[i] + progression.in_progress.data[i];
+    });
+}
+
+function calculate_progression(tickets, timeline, width) {
+    "use strict";
+    return produce_multi_array(timeline, function (date) {
+        return calculate_wip(tickets, date);
+    });
+}
+
+
+
+
+/**
+ *  calculate the statistics for a set of tickets
+ */
+function statistics(tickets,options) {
+
+    options = options || {};
+
+    options.today       = new Date(options.today || Today());
+    options.eta_expected= new Date(options.eta_expected || Today());
+
+
+    function calculate_trend(old_value, new_value) {
+
+        var average = (old_value + new_value) / 2;
+        var diff = new_value - old_value;
+        var unsigned_diff = (diff < 0) ? -diff : diff;
+        var sign = (diff < 0) ? -1 : 1;
+        var variation = Math.round((new_value - old_value) / old_value * 1000) / 10;
+        return variation + "%";
+
+        if (unsigned_diff < 0.05 * average) return 0;
+        if (unsigned_diff < 0.10 * average) {
+            return sign * 1;
+        }
+        if (unsigned_diff < 0.20 * average) {
+            return sign * 2;
+        }
+        if (unsigned_diff < 0.30 * average) {
+            return sign * 3;
+        }
+        return " " + (4 * sign) + " " + average + " " + unsigned_diff;
+
+    }
+
+    var s = {};
+    s.nb_known_defects = 0;
+    s.nb_unplanned_defects = 0;
+    s.nb_new_defects = 0;
+    s.nb_in_progress_defects = 0;
+    s.nb_delivered_defects = 0;
+
+    s.nb_known_us = 0;
+    s.nb_unplanned_us = 0;
+    s.nb_new_us = 0;
+    s.nb_in_progress_us = 0;
+    s.nb_delivered_us = 0;
+
+    s.reference_date = options.today;
+
+
+    var defects = [];
+    var user_stories = [];
+
+    s.speedup_factor1 = 5.0;
+    s.speedup_factor2 = 2.0;
+
+    console.log(" reference date ".yellow, s.reference_date);
+
+    tickets.forEach(function (ticket) {
+
+        var status = ticket.find_status_at_date(s.reference_date);
+
+        if (is_one_of(ticket.type, ["U-S", "EVO"])) {
+
+
+            if (status !== "unknown") {
+
+                s.nb_known_us++;
+                user_stories.push(ticket);
+
+                if (status == "unplanned") {
+                    s.nb_unplanned_us++;
+                } else if (status === "Done") {
+                    s.nb_delivered_us++;
+                } else if (status === "In Progress") {
+                    s.nb_in_progress_us++;
+                } else if (status === "New") {
+                    s.nb_new_us++;
+                } else {
+                    throw new Error(" unexpected status " + status);
+                }
+            }
+        }
+        if (is_one_of(ticket.type, ["BUG", "QA"])) {
+
+
+            if (status !== "unknown") {
+
+                s.nb_known_defects++;
+                defects.push(ticket);
+
+                if (status == "unplanned") {
+                    s.nb_unplanned_defects++;
+                } else if (status === "Done") {
+                    s.nb_delivered_defects++;
+                } else if (status === "In Progress") {
+                    s.nb_in_progress_defects++;
+                } else if (status === "New") {
+                    s.nb_new_defects++;
+                } else {
+                    throw new Error(" unexpected status " + status);
+                }
+
+
+            }
+        }
+    });
+
+    // assert( user_stories.length === ( s.nb_unplanned_us + s.nb_delivered_us +  s.nb_in_progress_us + ));
+
+    var STANDARD_DEFECTS_PER_USERSTORY = 3.14;  // assume 3 bugs per US in average
+    var STANDARD_DEFECT_VELOCITY       = 3.14;   // assume that a normal team fixes STANDARD_DEFECT_VELOCITY bugs every working day.
+    var STANDARD_USERSTORY_VELOCITY    = 0.628; // assume that a normal team fixes one us every two working days.
+    var NEAR_ZERO_VELOCITY = 0.02; // NEAR ZERO velocity ( in this case we use standard speed)
+
+    s.ratio_defect_per_us =s.nb_delivered_us ?  Math.round(s.nb_known_defects / s.nb_delivered_us * 100) / 100 :  STANDARD_DEFECTS_PER_USERSTORY ;
+
+    s.today = options.today;
+    s.lastMonth = s.today.removeBusinessDay(20);
+
+    s.velocity_defects            = velocity_KPI(defects, s.today);
+    s.velocity_defects_last_month = velocity_KPI(defects, s.lastMonth);
+
+    // make sure that velocity of defect is not null
+    s.velocity_defects            =  (s.velocity_defects > NEAR_ZERO_VELOCITY ?  s.velocity_defects : STANDARD_DEFECT_VELOCITY);
+    s.velocity_defects_last_month =  (s.velocity_defects_last_month  > NEAR_ZERO_VELOCITY ?  s.velocity_defects_last_month : STANDARD_DEFECT_VELOCITY);
+
+
+
+    s.velocity_defects_trend      = calculate_trend(s.velocity_defects_last_month, s.velocity_defects);
+
+    s.velocity_us               = velocity_KPI(user_stories, s.today);
+    s.velocity_us_last_month    = velocity_KPI(user_stories, s.lastMonth);
+
+    s.velocity_us            =  (s.velocity_us > NEAR_ZERO_VELOCITY ?  s.velocity_us : STANDARD_USERSTORY_VELOCITY);
+    s.velocity_us_last_month =  (s.velocity_us_last_month  > NEAR_ZERO_VELOCITY ?  s.velocity_us_last_month : STANDARD_USERSTORY_VELOCITY);
+
+    s.velocity_us_trend = calculate_trend(s.velocity_us_last_month, s.velocity_us);
+
+
+
+    s.average_defects_lead_time = lead_time_KPI(defects, s.today);
+    s.average_defects_lead_time_last_month = lead_time_KPI(defects, s.lastMonth);
+    s.average_defects_lead_time_trend = calculate_trend(s.average_defects_lead_time_last_month,
+        s.average_defects_lead_time);
+
+    s.average_user_story_lead_time = lead_time_KPI(user_stories, s.today);
+    s.average_user_story_lead_time_last_month = lead_time_KPI(user_stories, s.lastMonth);
+    s.average_user_story_lead_time_trend = calculate_trend(s.average_user_story_lead_time_last_month,
+        s.average_user_story_lead_time);
+
+    // the expected date for the end of the project
+    s.eta_expected = options.eta_expected
+
+    // s.c = JSON.stringify(configuration);
+    // -----------------------------------------------------------------
+
+
+    /**
+     * calculate a forecast based on  a given number of incoming new user stories that are not known yet.
+     * @param nb_incoming_us
+     * @returns {{}}
+     */
+    s.forecast = function (nb_incoming_us) {
+
+
+        var f = {};
+        var s = this;
+
+        //xx console.log(s);
+
+
+        assert(_.isFinite(s.velocity_defects));
+        assert(_.isFinite(s.velocity_us));
+        assert(_.isFinite(s.nb_new_us));
+        assert(_.isFinite(s.velocity_defects_last_month) && s.velocity_defects_last_month>0);
+        assert(_.isFinite(s.velocity_defects) && s.velocity_defects>0);
+
+        // estimated number of new user stories that are currently not known
+        f.nb_incoming_us = nb_incoming_us;
+
+        // number of user stories in the product backlog (those user stories haven't been started yet)
+        f.nb_new_backlog_size = s.nb_new_us + nb_incoming_us;
+
+        // calculate the estimated number of bugs that will be generated with
+        // the user stories already in progress (wip) and the user stories still in the backlog
+
+        // probability for a in progress user story to generate new bugs that are unknown today
+        f.coef1 = 1.00 * s.ratio_defect_per_us;
+
+        // probability for a user story that has been already delivered to generate a new bug ( not known today )
+        f.coef2 = 0.01 * s.ratio_defect_per_us;
+
+        // probability for a in progress user story to generate new bugs that are unknown today
+        f.coef3 = 1.20 * s.ratio_defect_per_us;
+
+        // we assume that the user stories that are currently in progress have a 50% progress ratio.
+        f.assumed_in_progress_us_completion_ratio     = 0.5;
+
+        // we assume that the defects that are currently in progress have a 50% progress ratio.
+        f.assumed_in_progress_defect_completion_ratio = 0.5;
+
+        // calculate an estimation of the number of new bug that will be generated in the projet
+        f.estimated_number_of_future_defects = Math.round(
+                f.coef1 * s.nb_in_progress_us +
+                f.coef2 * s.nb_delivered_us +
+                f.coef3 * f.nb_new_backlog_size);
+        assert(_.isFinite(f.estimated_number_of_future_defects));
+
+        f.averaged_nb_defect_to_completion = (s.nb_in_progress_defects * f.assumed_in_progress_defect_completion_ratio +
+            s.nb_new_defects + f.estimated_number_of_future_defects );
+        assert(_.isFinite(f.averaged_nb_defect_to_completion));
+
+        f.nb_days_to_completion1 = Math.round(f.averaged_nb_defect_to_completion / s.velocity_defects);
+
+        assert(_.isFinite(f.nb_days_to_completion1));
+
+        f.nb_calendar_days_to_completion1 = Math.round(f.nb_days_to_completion1 * 7 / 5);
+        assert(_.isFinite(f.nb_calendar_days_to_completion1));
+
+
+        //
+        // in the first periods, user_stories and defects are processed at the same time and current velocities applies
+        // a very optimistic scenario is to consider that project will stop straight after the last US is finished
+        // in this case there will be no room left to finish up the defects
+        //
+        f.nb_days_to_completion2 = Math.round(
+                (s.nb_in_progress_us * f.assumed_in_progress_us_completion_ratio +
+                    f.nb_new_backlog_size ) / s.velocity_us);
+
+        f.nb_calendar_days_to_completion2 = Math.round(f.nb_days_to_completion2 * 7 / 5);
+
+        console.log("f.nb_days_to_completion1",f.nb_days_to_completion1,s.velocity_defects);
+        console.log("f.nb_days_to_completion2",f.nb_days_to_completion2,s.velocity_defects);
+
+        // in reality there is a speed up of (2x to 5x) if the team only work on ano/evo
+        //
+        f.number_of_fixed_defect_during_mixed_period = Math.round(f.nb_days_to_completion2 * s.velocity_defects);
+
+        f.remaining_defect_during_fast_period = f.averaged_nb_defect_to_completion -
+            f.number_of_fixed_defect_during_mixed_period;
+
+        if (f.remaining_defect_during_fast_period < 10) {
+            f.remaining_defect_during_fast_period = 10;
+        }
+
+        f.number_of_days_to_fixed_remaining_defect_fast1 = Math.round(f.remaining_defect_during_fast_period / ( s.velocity_defects * s.speedup_factor1));
+        f.number_of_days_to_fixed_remaining_defect_fast2 = Math.round(f.remaining_defect_during_fast_period / ( s.velocity_defects * s.speedup_factor2));
+
+        var today = s.today;
+
+        f.eta_very_optimistic = today.addBusinessDay(f.nb_days_to_completion2);
+
+        f.eta_optimistic_with_one_month_stab = today.addBusinessDay(f.nb_days_to_completion2 + 31);
+
+
+        f.eta_probable = today.addBusinessDay(f.nb_days_to_completion2 + f.number_of_days_to_fixed_remaining_defect_fast1);
+
+
+        f.eta_pessimistic = today.addBusinessDay(f.nb_days_to_completion2 + f.number_of_days_to_fixed_remaining_defect_fast2);
+
+        f.delta_eta = tl.diffDate(s.eta_expected, f.eta_probable);
+
+        // based on probable
+        var b = tl.calculateNumberOfNonBusinessDays(today, f.nb_days_to_completion2 + f.number_of_days_to_fixed_remaining_defect_fast1);
+        f.non_business_days = ' ' + b.vacations + " / " + b.weekend + ' / ' + b.bridge;
+        return f;
+    }
+
+    console.log(" calculating statistics  : today        is ".yellow,options.today );
+    console.log(" calculating statistics  : eta_expected is ".yellow,options.eta_expected );
+    console.log(" calculating statistics  : last month was  ".yellow,s.lastMonth );
+
+    return s;
+}
+
+exports.statistics = statistics;
+exports.calculate_progression = calculate_progression;
+exports.average_lead_time_progression = average_lead_time_progression;
+exports.average_wip_progression = average_wip_progression;
+
+
+
+},{"./kanban_kpi/lead_time":46,"./kanban_kpi/throughput_progression":47,"./kanban_kpi/velocity":48,"./kanban_kpi/work_in_progress":49,"./timeline":52,"./today":53,"./workitem":55,"assert":2,"underscore":59}],51:[function(require,module,exports){
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+var assert = require("assert");
+var _ = require("underscore");
+var WorkItem = require("./workitem").WorkItem;
+var HashMap = require("./hashmap").HashMap;
+
+var serialize = require("serialijse").serialize;
+var deserialize = require("serialijse").deserialize;
+var declarePersistable = require("serialijse").declarePersistable;
+
+
+function Project(options) {
+    this._work_items = [];
+    this._index = {};
+
+    var self = this;
+    if (options && options.tickets) {
+        options.tickets.forEach(function (t) {
+            self.add_work_item(t);
+        });
+    }
+
+};
+
+Project.prototype.add_work_item = function (work_item) {
+    this._work_items.push(work_item);
+    this._index[work_item.id] = work_item;
+};
+
+Project.prototype.find_work_item = function (id) {
+    return this._index[id];
+};
+
+/**
+ * @property nb_work_item {Integer}
+ */
+Project.prototype.__defineGetter__("nb_work_items", function () {
+    return this._work_items.length;
+});
+
+var fs = require("fs");
+
+declarePersistable(Project);
+declarePersistable(WorkItem);
+declarePersistable(HashMap);
+
+
+Project.prototype.loadString = function (dataString, options,callback) {
+
+    if (_.isFunction(options) && !callback) {
+        callback = options;
+        options = {};
+    }
+    assert(_.isFunction(callback));
+
+    var self = this;
+
+    self._work_items = deserialize(dataString);
+    assert(_.isArray(self._work_items), " expecting an array here");
+
+    // rebuild index;
+    self._index = {}
+    self._work_items.forEach(function (work_item) {
+        self._index[work_item.id] = work_item;
+    });
+    callback(null);
+
+};
+
+Project.prototype.load = function (filename, callback) {
+
+    assert(_.isFunction(callback));
+
+    var self = this;
+
+    var f = fs.readFile(filename, function (err, serializationString) {
+
+        if (err) {
+            callback(err);
+            return;
+        }
+        serializationString = serializationString.toString();
+        self.loadString(serializationString,callback);
+
+    });
+};
+
+Project.prototype.saveString = function (callback) {
+    assert(_.isFunction(callback));
+    var self = this;
+    var serializationString = serialize(self._work_items);
+    callback(null,serializationString);
+};
+
+Project.prototype.save = function (filename, callback) {
+
+    assert(_.isFunction(callback));
+    var self = this;
+    self.saveString(function(err,serializationString){
+        var f = fs.writeFile(filename, serializationString, function (err) {
+            callback(err);
+        });
+    });
+};
+
+
+Project.prototype.__defineGetter__("use_cases",function(){
+    var self = this;
+    return self._work_items.filter(function(wi){ return wi.type === "U-C"; });
+});
+
+Project.prototype.__defineGetter__("top_level_use_cases",function(){
+    var self = this;
+    return self._work_items.filter(function(wi){ return wi.type === "U-C" && wi.parent_id === "noparent"; });
+});
+
+Project.prototype.__defineGetter__("user_stories",function(){
+    var self = this;
+    return self._work_items.filter(function(wi){ return wi.type === "U-S"; });
+});
+
+Project.prototype.__defineGetter__("defects",function(){
+    var self = this;
+    return self._work_items.filter(function(wi){ return wi.type === "BUG"; });
+});
+
+var get_start_date = require("./workitem_utils").get_start_date;
+Project.prototype.__defineGetter__("startDate",function(){
+    var self = this;
+    return get_start_date(self._work_items);
+});
+
+var get_last_updated_date = require("./workitem_utils").get_last_updated_date;
+Project.prototype.__defineGetter__("lastUpdatedDate",function(){
+    var self = this;
+    return get_last_updated_date(self._work_items);
+});
+
+exports.Project = Project;
+
+},{"./hashmap":43,"./workitem":55,"./workitem_utils":56,"assert":2,"fs":1,"serialijse":57,"underscore":59}],52:[function(require,module,exports){
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+/**
+ *  @module Timeline : Module to deal with a Kanban Timeline
+ */
+
+var assert = require ('assert');
+
+var Today = require("./today").Today;
+
+
+function _weekday(date) {
+  "use strict";
+  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][date.getDay()];
+}
+
+/**
+ * @class Date
+ * @method weekday
+ * @return {String} the three first letters of the week day (in english)
+ */
+Date.prototype.weekday = function()
+{
+    return _weekday(this);  
+}
+
+/**
+ *  find the date working days ago in the past from
+ *  ( excluding week-end , but not vacation )
+ *
+ */
+function _working_days_ago(d,working_day_ago, optional_hour_shift) {
+  "use strict";
+  var r = working_day_ago % 5;
+  var w = Math.round( (working_day_ago-r) / 5 );
+  var a = w*7+r;
+
+  optional_hour_shift = (optional_hour_shift ? optional_hour_shift : 0);
+  
+  var nd = new Date(d.getFullYear(), 
+                    d.getMonth(),
+                    d.getDate() - a,
+                    d.getHours() + optional_hour_shift,
+                    d.getMinutes() + 0);
+
+  return nd;
+}
+/**
+ * @class Date
+ * @method working_days_ago
+ * @param working_days_ago {Integer} the number of working day in the past
+ * @param optional_hour_shift
+ * @return {Date} return a date in the past  matching the number of working days ago
+ */
+Date.prototype.working_days_ago = function (working_days_ago,optional_hour_shift){
+   return _working_days_ago(this,working_days_ago,optional_hour_shift);
+};
+
+
+/**
+ * @class Date
+ * @param calendar_days
+ * @param optional_hour_shift
+ * @returns {Date}
+ */
+Date.prototype.next_day = function(calendar_days,optional_hour_shift) 
+{
+   calendar_days = calendar_days ? calendar_days : 1;
+   optional_hour_shift = (optional_hour_shift  ? optional_hour_shift : 0);
+
+   var d = new Date(this.getFullYear() , 
+                    this.getMonth(), 
+                    this.getDate(),
+                    this.getHours() + optional_hour_shift, 
+                    this.getMinutes() );
+   d.setDate(d.getDate()+ calendar_days);
+   return d;
+};
+
+Date.prototype.days_ago = function(calendar_days,optional_hour_shift)
+{
+   calendar_days = calendar_days ? calendar_days : 1;
+   return this.next_day(-calendar_days,optional_hour_shift)
+};
+
+// exports.days_ago = _days_ago;
+exports.weekday = _weekday;
+
+
+// from http://snipplr.com/view/4086/
+function calcBusinessDays_old(dDate1, dDate2) { // input given as Date objects
+
+    "use strict";
+    // turn date to dates
+    if (typeof dDate1 === "string" ) {
+        dDate1 = new Date(dDate1);
+    } 
+    if ( typeof dDate2 === "string") {
+        dDate2 = new Date(dDate2);
+    }
+    var iWeeks, iDateDiff, iAdjust = 0;
+
+    if (dDate2 < dDate1) return - calcBusinessDays(dDate2,dDate1); // error code if dates transposed
+
+    var iWeekday1 = dDate1.getDay(); // day of week
+    var iWeekday2 = dDate2.getDay();
+
+    iWeekday1 = (iWeekday1 === 0) ? 7 : iWeekday1; // change Sunday from 0 to 7
+    iWeekday2 = (iWeekday2 === 0) ? 7 : iWeekday2;
+
+    if ((iWeekday1 > 5) && (iWeekday2 > 5)) iAdjust = 1; // adjustment if both days on weekend
+
+    iWeekday1 = (iWeekday1 > 5) ? 5 : iWeekday1; // only count weekdays
+    iWeekday2 = (iWeekday2 > 5) ? 5 : iWeekday2;
+
+    // calculate differnece in weeks (1000mS * 60sec * 60min * 24hrs * 7 days = 604800000)
+    iWeeks = Math.floor((dDate2.getTime() - dDate1.getTime()) / 604800000);
+
+    if (iWeekday1 <= iWeekday2) {
+        iDateDiff = (iWeeks * 5) + (iWeekday2 - iWeekday1)
+    } else {
+        iDateDiff = ((iWeeks + 1) * 5) - (iWeekday1 - iWeekday2)
+    }
+
+    iDateDiff -= iAdjust; // take into account both days on weekend
+
+    return (iDateDiff + 1); // add 1 because dates are inclusive
+
+}
+
+// from http://snipplr.com/view/4086/
+function calcBusinessDays(dDate1, dDate2) { // input given as Date objects
+
+    "use strict";
+    // turn date to dates
+    if (typeof dDate1 === "string" ) {
+        dDate1 = new Date(dDate1);
+    } 
+    if ( typeof dDate2 === "string") {
+        dDate2 = new Date(dDate2);
+    }
+    if (dDate2 < dDate1) {
+       // negative duration if dDate2 < dDate1
+ 	     return - calcBusinessDays(dDate2,dDate1); 
+    }
+
+    var nbWorkingDay = 0;
+    var date = new Date(dDate1);
+
+    while (date <= dDate2) {
+       if ( date.isWorkingDay() ) { 
+         nbWorkingDay +=1;
+       }
+       date.setDate(date.getDate()+1);
+   }
+   return nbWorkingDay;
+}
+
+
+function VacationTable()
+{
+    this._recurrent_vacation_date={};
+}
+
+/**
+ * @method add_recurrent_vacation_day
+ * @param description {String}
+ * @param day_in_month {Integer} 1-31
+ * @param month 1-12
+ */
+VacationTable.prototype.add_recurrent_vacation_day = function(description, day_in_month,month) {
+    assert(day_in_month >= 1 && day_in_month <= 31);
+    assert(month >= 1 && month <= 12);
+
+    this._recurrent_vacation_date[month*100+day_in_month] = "description";
+
+};
+VacationTable.prototype.isVacation = function(date) {
+
+    // var year  = date.getFullYear();
+    var dow   = date.getDay(); // 0-6 0 Sunday, 6 Saturday
+    var month = date.getMonth()+1 ; // 1= Jan => 12 Dec
+    var day   = date.getDate(); // 1 -31
+
+    return this._recurrent_vacation_date.hasOwnProperty(month*100+day);
+};
+exports.VacationTable = VacationTable;
+
+
+function build_french_vacation_manager(){
+    var vm = new VacationTable();
+    vm.add_recurrent_vacation_day("1st of Jan"     ,1,1);
+    vm.add_recurrent_vacation_day("Fête du travail",1,5);
+    vm.add_recurrent_vacation_day("8 Mai"          ,8,5);
+    vm.add_recurrent_vacation_day("14 Juillet"     ,14,7);
+    vm.add_recurrent_vacation_day("15 Aout"        ,15,8);
+    vm.add_recurrent_vacation_day("11 Novembre"    ,11,11);
+    vm.add_recurrent_vacation_day("Christmas"      ,25,12);
+    vm.add_recurrent_vacation_day("Boxing day"     ,26,12);
+    vm.add_recurrent_vacation_day("31 décembre"    ,31,12);
+
+
+    vm.add_recurrent_vacation_day(" End of July"   ,20,7);
+    vm.add_recurrent_vacation_day(" End of July"   ,21,7);
+    vm.add_recurrent_vacation_day(" End of July"   ,22,7);
+    vm.add_recurrent_vacation_day(" End of July"   ,23,7);
+    vm.add_recurrent_vacation_day(" End of July"   ,24,7);
+    vm.add_recurrent_vacation_day(" End of July"   ,25,7);
+    vm.add_recurrent_vacation_day(" End of July"   ,26,7);
+    vm.add_recurrent_vacation_day(" End of July"   ,27,7);
+    vm.add_recurrent_vacation_day(" End of July"   ,28,7);
+    vm.add_recurrent_vacation_day(" End of July"   ,29,7);
+    vm.add_recurrent_vacation_day(" End of July"   ,30,7);
+    vm.add_recurrent_vacation_day(" End of July"   ,31,7);
+
+    vm.add_recurrent_vacation_day(" August"        ,1,8);
+    vm.add_recurrent_vacation_day(" August"        ,2,8);
+    vm.add_recurrent_vacation_day(" August"        ,3,8);
+    vm.add_recurrent_vacation_day(" August"        ,4,8);
+    vm.add_recurrent_vacation_day(" August"        ,5,8);
+    vm.add_recurrent_vacation_day(" August"        ,6,8);
+    vm.add_recurrent_vacation_day(" August"        ,7,8);
+    vm.add_recurrent_vacation_day(" August"        ,8,8);
+    vm.add_recurrent_vacation_day(" August"        ,9,8);
+    vm.add_recurrent_vacation_day(" August"        ,10,8);
+    vm.add_recurrent_vacation_day(" August"        ,11,8);
+    vm.add_recurrent_vacation_day(" August"        ,12,8);
+    vm.add_recurrent_vacation_day(" August"        ,13,8);
+    vm.add_recurrent_vacation_day(" August"        ,14,8);
+
+    return vm;
+}
+
+
+var default_vacationTable = build_french_vacation_manager();
+exports.installVacationManager =function(vm) {
+    var old_vacationTable = default_vacationTable;
+   // assert(vm instanceof VacationTable);
+    default_vacationTable = vm;
+    return old_vacationTable;
+};
+
+if (this._recurrent_vacation_date)
+
+function _isWeekEnd(date) {
+    var dow = date.getDay(); // 0-6 0 Sunday, 6 Saturday
+    return (dow===0) || (dow===6);
+}
+
+VacationTable.prototype.isBridgeDay = function(date)
+{
+    // this is not a week end date
+    if (_isWeekEnd(date))   return false;
+    if (this.isVacation(date))  return false;
+    var yesterday = date.days_ago(1);
+    var tomorrow  = date.next_day(1);
+//    var day_before_yestarday = date.days_ago(2);
+//    var day_after_tomorrow  = date.next_day(2);
+  
+    if (this.isVacation(yesterday)  && _isWeekEnd(tomorrow))
+         return true;
+    if (this.isVacation(tomorrow)   && _isWeekEnd(yesterday) )
+         return true; // for instance    Sun - Mon - Thu
+    return false;
+}
+
+VacationTable.prototype.isWorkingDay = function(date)
+{
+  if (_isWeekEnd(date))       { return false;}
+  if (this.isVacation(date))  { return false;}
+  if (this.isBridgeDay(date)) { return false;}
+  return true;
+};
+
+
+
+Date.prototype.isWeekEnd       = function()  { return _isWeekEnd(this);    }
+Date.prototype.isBridge        = function()  { return default_vacationTable.isBridgeDay(this);  }
+Date.prototype.isWorkingDay    = function()  { return default_vacationTable.isWorkingDay(this); }
+Date.prototype.isVacation      = function()  { return default_vacationTable.isVacation(this);   }
+
+//xx Date.prototype.isNonWorkingDay = function()  { return !_isWorkingDay(this); }
+
+function calculateNumberOfNonBusinessDays(startDate, numBusinessDays) {
+     // thanks stack overflow!
+     // http://stackoverflow.com/questions/1534804/how-can-i-add-business-days-to-the-current-date-in-java
+     // console.log(" startDate =", startDate," nbBusiness Days = ",  numBusinessDays) ;
+    var cal       = new Date(startDate);
+    var weekend   = 0;
+    var vacations = 0;
+    var bridge    = 0;
+
+    if (numBusinessDays === 0 ) { 
+        var res =  { 'weekend':weekend, 'vacations': vacations , 'bridge':bridge , 'end_date': cal};
+        return res;
+    }
+
+    function creep() {
+       while(!cal.isWorkingDay()) {
+         
+          if (cal.isWeekEnd()) {
+            weekend+=1;
+          } else if (cal.isBridge() ) {
+            bridge +=1;
+          } else if (cal.isVacation()) {
+            vacations +=1;
+          } 
+          cal = cal.next_day(1);
+       }
+       assert(cal.isWorkingDay(), " Creep " + cal + "should be working day");
+    }
+
+    creep(); // move to next working day or stay at current date
+    assert(cal.isWorkingDay(), cal + "should be working day");
+
+    for(var i = 0; i <numBusinessDays-1; i++) {
+       cal = cal.next_day(1);  // move to tommorow
+       creep(cal); // .. and creep to next working day
+    }
+    var res =  { 'weekend':weekend, 'vacations': vacations , 'bridge':bridge , 'end_date': cal};
+//    console.log(JSON.stringify(res));
+    assert( cal.isWorkingDay(), " cal " + cal + " Should be a working day ("+numBusinessDays+")"+JSON.stringify(res));
+    return res;
+
+  }
+
+
+
+/**
+ * Calculates the number of calendar days
+ * between two dates
+ */
+function diffDate (d1,d2 ) {
+
+    d1 = new Date(d1);
+    d2 = new Date(d2);
+
+    // remove the time portion, set the dates to midnight
+    // d1.setHours(0,0,0,0);
+    // d2.setHours(0,0,0,0);
+
+    var diff = Math.ceil((d2 - d1) / 86400000) + 1;
+    return diff;
+}
+
+/**
+ *  calculate the date which is nb_business_day
+ *  after the refDate
+ *  this method takes into account weekend , vacations and bridges
+ */
+function _addBusinessDay(refDate,nb_business_day) {
+
+    var b = calculateNumberOfNonBusinessDays(refDate,nb_business_day);
+
+    var d1 = refDate.next_day(nb_business_day+ b.weekend + b.vacations + b.bridge-1);
+
+    return d1;
+}
+
+Date.prototype.addBusinessDay = function(nb_business_day) {
+
+   return _addBusinessDay(this,nb_business_day);
+};
+
+Date.prototype.removeBusinessDay = function(nb_business_day) {
+  
+   var d  = new Date(this);
+   for (var i=0;i<nb_business_day;i++) {
+     while (!d.isWorkingDay()) {
+      	d = d.days_ago(1);
+     }
+     d = d.days_ago(1);
+   }
+   while (!d.isWorkingDay()) {
+      	d = d.days_ago(1);
+   }
+   return d;
+};
+
+
+function build_time_line_raw(startDate,endDate) {
+    "use strict";
+    var timeline = [];
+
+    if (!endDate) endDate = Today(); // TODAY
+
+    for (var i = 0; i < 220; i++) {
+        var d = new Date(startDate);
+        d.setDate(d.getDate() + i);
+        // avoid week ends
+        if (d.getDay() >= 1 && d.getDay() <= 5) {
+            timeline.push(new Date(d));
+        }
+        if (d >= endDate) break;
+    }
+    return timeline;
+}
+
+
+/**
+ * @method  build_time_line
+ * @param   startDate {Date}
+ * @param   startDate {endDate}
+ * @return {Array<Date>}
+ * create a time line starting at startDate or next closest working day if startDate is  not a working date
+ * and excluding vacations and week-ends
+ */
+function build_time_line(startDate,endDate) {
+    "use strict";
+    var timeline = [];
+
+    endDate =new Date( endDate || Today());
+
+    var current_date = new Date(startDate);
+    if (endDate.getTime() < current_date.getTime()) {
+        throw new Error("Invalid endDate < startDate in build_time_line endDate=" + endDate + " startDate=" + startDate);
+    }
+    // find first working day preceding startDate
+    // if start date is not a working day
+    while(!current_date.isWorkingDay()) {
+        current_date = current_date.days_ago(1);
+    }
+
+    for (var i = 0; i<=1001 ; i++) {
+        if (i>=1000) { throw new Error("Timeline too large !!!"); }
+        // avoid week ends
+        if (current_date.isWorkingDay()) {
+            timeline.push(current_date);
+        }
+        current_date = current_date.next_day(1);
+        if (current_date.getTime() > endDate.getTime()) break;
+    }
+    return timeline;
+}
+
+
+
+
+exports.calcBusinessDays = calcBusinessDays;
+exports.calculateNumberOfNonBusinessDays = calculateNumberOfNonBusinessDays
+exports.diffDate         = diffDate;
+exports.build_time_line  = build_time_line;   
+
+},{"./today":53,"assert":2}],53:[function(require,module,exports){
+/**
+ * @method  Today
+ * mockable method returning Today's date
+ * @returns {Date}
+ * @constructor
+ */
+
+var _today = new Date();
+function Today() {
+  return _today;
+}
+Today.set = function(date) {
+  _today = new Date(date);
+}
+exports.Today = Today;
+
+},{}],54:[function(require,module,exports){
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+function ellipsys(str, maxl) {
+  "use strict";
+  if (!str) {
+    return " UNDEFINED ....";
+  }
+  if (str.length <= maxl) {
+    return str;
+  }
+  return str.substring(0, maxl) + "...";
+}
+
+
+function dateToYMD(date) {
+  "use strict"
+  var d = date.getDate();
+  var m = date.getMonth()+1;
+  var y = date.getFullYear();
+  return '' + y +'-'+ (m<=9?'0'+m:m) +'-'+ (d<=9?'0'+d:d);
+}
+
+exports.ellipsys = ellipsys;
+exports.dateToYMD = dateToYMD;
+},{}],55:[function(require,module,exports){
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+/**
+ * @module RedminKanban
+ *
+ * WorkItem
+ * A WorkItem is an element used for kanban statistics,
+ * it could either be a "user story",  a "use case" or a "defect"
+ * A workitem holds a history of status changes
+ *
+ */
+var assert = require("assert");
+
+var HashMap = require("./hashmap").HashMap;
+var tl = require('./timeline');
+var Today = require("./today").Today;
+
+/**
+ * @class WorkItem
+ * @param options
+ * @param options.id            {Integer} - the work item identification number.
+ * @param options.subject       {String}  - the title string of the work item.
+ * @param options.type          {String}  - the type of work item.
+ * @param options.created_on    {Date}    - the work item creation date.
+ * @param options.fixed_version {String}  - the name of the version in which the work item has been fixed/assigned.
+ * @param options.priority      {Integer} - the work item priority - higher number means higher priority.
+ * @param options.complexity    {String}  - the work item complexity.
+ * @param options.projet        {String}  - the name of the project the work item has been assigned to.
+ * @constructor
+ */
+function WorkItem(options) {
+
+    options = options || {};
+
+    this.current_status = "New";
+
+    this.relations = [];
+    this.blocked_by = [];
+    this.children = [];
+    this.defects = [];
+    this.type = "U-S"; // user story
+    this.fixed_version = "SomeVersion";
+    this.journal = [];
+
+    if (typeof options === typeof {}) {
+        var fields = {
+            "id": "[0-9]+",
+            "relations":"",
+            "blocked_by":"" ,
+            "user_stories":"",
+            "defects":"",
+            "journal":"",
+            "parent_id":"",
+            "done_ratio":"",
+            "subject": "\w",
+            "type": "(U-S|U-C|BUG|EVO|QA)",
+            "created_on": "DATE",
+            "updated_on": "DATE",
+            "fixed_version": "IDENT",
+            "priority": "NUMBER",
+            "complexity": "(S|M|L|XL|XXL)",
+            "current_status": "Done|In Progress|New",
+            "project": "STRING"
+        };
+        var me = this;
+        Object.keys(options).forEach(function (field) {
+            if (!fields.hasOwnProperty(field)) {
+                console.log(options);
+                throw new Error("invalid options set : " + field);
+            }
+            // TODO : make some type checking and asserts
+            me[field] = options[field];
+        });
+    }
+
+    this.created_on = options.created_on ? new Date(options.created_on) : Today();
+
+    this.updated_on = ( options.updated_on) ? options.updated_on: this.created_on;
+
+    var _cur_status = this.current_status;
+    this.current_status = "undefined";
+    this.set_status(this.created_on, _cur_status);
+    assert(this.created_on.toString() === this.updated_on.toString());
+    if (this.parent_id === null ) {
+        this.parent_id = "noparent";
+    }
+}
+
+
+WorkItem.prototype.__defineGetter__("unplanned",function() {
+    return !this.fixed_version || this.fixed_version === "unplanned";
+});
+
+WorkItem.prototype.__defineGetter__("user_stories",function() {
+    return this.children.filter(function(workitem){ return workitem.type === "U-S"; });
+});
+
+WorkItem.prototype.__defineGetter__("use_cases",function() {
+    return this.children.filter(function(workitem){ return workitem.type === "U-C"; });
+});
+
+//WorkItem.createFromJSON = function(jsonObj) {
+//
+//    var work_item = new WorkItem();
+//    Object.keys(jsonObj).forEach(function (field) { work_item[field] = jsonObj[field]; });
+//    return work_item;
+//}
+
+/**
+ *  calculate the consolidated percent done
+ *  from  a collection of work item
+ */
+function consolidated_percent_done(collection) {
+    "use strict";
+    var nb_el = 0;
+    var total = 0;
+
+    if (!collection) return 0;
+    if (collection.length === 0) return 0;
+
+    collection.forEach(function (workitem) {
+
+        if (workitem.unplanned) {
+            // ignore unplanned element
+            return;
+        }
+        total += workitem.percent_done();
+        nb_el += 1;
+    });
+    if (nb_el === 0) return 0;
+    return Math.round(total / nb_el);
+}
+
+exports.private = {};
+exports.private.consolidated_percent_done = consolidated_percent_done;
+
+function get_adjusted_raw_done_ratio(workitem) {
+    if (!workitem)  {
+      return 0;
+    }
+    if (workitem.current_status === "Done") {
+      return 100;
+    }
+    if (!workitem.done_ratio) {
+      return 0;
+    }
+    return  workitem.done_ratio;
+}
+
+WorkItem.prototype.is_in_progress = function () {
+
+    if (this.current_status === "In Progress") {
+      return true;
+    }
+    var done_ratio = get_adjusted_raw_done_ratio(this);
+
+   if (done_ratio > 0 && done_ratio < 100) {
+      return true;
+    }
+
+    return false;
+};
+
+WorkItem.prototype.is_done = function () {
+    "use strict";
+    return this.percent_done() > 99.999;
+};
+
+WorkItem.prototype.adjust_done_ratio = function () {
+    this.done_ratio = get_adjusted_raw_done_ratio(this);
+};
+
+
+WorkItem.prototype.percent_done = function () {
+
+    "use strict";
+
+    if (this.type === "U-C") {
+        if (this.children.length === 0) {
+            return 0.0;
+        }
+        var p_us =  consolidated_percent_done(this.children);
+        var p_ano = consolidated_percent_done(this.defects);
+        var n_us =  this.children.length;
+        var n_ano = this.defects.length;
+        if (n_us + n_ano === 0) return 0;
+        //xx console.warn(" ---------------- [ ", p_us, p_ano, n_us, n_ano)
+        return Math.round((p_us * 80 * n_us + p_ano * 20 * n_ano) / (n_us * 80 + n_ano * 20));
+
+    }
+    if (this.type === "U-S") {
+
+        return get_adjusted_raw_done_ratio(this);
+
+        var p_us = get_adjusted_raw_done_ratio(this);
+        var p_ano = consolidated_percent_done(this.defects);
+
+        var n_us = 1;
+        var n_ano = this.defects.size();
+        // console.warn(" ---------------- [ ", p_us,p_ano,n_us,n_ano)
+        return Math.round((p_us * 80 * n_us + p_ano * 20 * n_ano) / (100 * (n_us + n_ano)));
+
+    } else {
+        return get_adjusted_raw_done_ratio(this);
+    }
+};
+
+/**
+ * @method set_status
+ * @param date   {Date}
+ * @param status {String}
+ */
+WorkItem.prototype.set_status = function (date, status) {
+
+    assert(date);
+    assert(date >= this.updated_on);
+
+    this.journal.push({
+        date: date,
+        old_value: this.current_status,
+        new_value: status
+    });
+
+    this.updated_on = date;
+    this.current_status = status;
+};
+
+
+WorkItem.prototype.find_status_at_date = function (ref_date) {
+
+    "use strict";
+
+    if (ref_date < this.created_on) {
+        return "unknown";
+    }
+    if (!this.journal) {
+        return "unknown";
+    }
+    if (this.unplanned) {
+        return "unplanned"
+    }
+    for (var i = 0; i < this.journal.length; i++) {
+        var entry = this.journal[i];
+        if (entry.date > ref_date) {
+            return entry.old_value;
+        }
+    }
+    return this.current_status;
+};
+
+
+/**
+ *  find_starting_date
+ *  returns the date at which the work item went from
+ *  new to In Progress or Done.
+ */
+WorkItem.prototype.find_starting_date = function () {
+    for (var i = 0; i < this.journal.length; i++) {
+        var s = this.journal[i].new_value;
+        if (s === "In Progress" || s === "Done") {
+            return this.journal[i].date;
+        }
+    }
+    return undefined;
+};
+/**
+ *  find_completion_date
+ *  returns the date at which the work item went from
+ *  In Progress to "Done"
+ */
+WorkItem.prototype.find_completion_date = function () {
+   //TODO
+    for (var i = 0; i < this.journal.length; i++) {
+        var s = this.journal[i].new_value;
+        if (s === "Done") {
+            return this.journal[i].date;
+        }
+    }
+    return undefined;
+};
+
+/**
+ * calculate_lead_time:
+ * calculates the duration between the first "In Progress"
+ * to the last "Done"
+ *
+ *  - If the item is still in progress at ref_date, the algorithm
+ *    assumes arbitrarilly that 2 more days will be required to
+ *    get to "Done".
+ *  - If wip_flag is set the calculation of the lead time
+ *    starts from the starting_date, otherwise from the creation date
+ *
+ */
+WorkItem.prototype.calculate_lead_time = function (ref_date, wip_flag) {
+
+    "use strict";
+    var ticket = this;
+    wip_flag = ( wip_flag == undefined) ? false : true;
+
+    if (!ticket.is_done() && !ticket.is_in_progress()) {
+        // lead time is undefined
+        return undefined;
+    }
+    if (typeof ref_date === "undefined") {
+        ref_date = Today(); // today
+    }
+
+    var startDate = ticket.created_on;
+    if (wip_flag) startDate = ticket.find_starting_date();
+    if (startDate === undefined) {
+        return undefined;
+    }
+    if (ref_date <= startDate) {
+        return 0;
+    }
+    if (ticket.journal.length === 0) {
+        return 1; // was created as closed
+    }
+
+    //var endDate = new Date(ref_date); // today as ref_date
+    //xx var endDate = Today();
+    var now = new Date(ref_date);
+    var endDate = now;
+
+    var status = this.find_status_at_date(now);
+
+    if (status !== "Done") {
+        // add arbitrarily 2 working days
+        endDate = now.addBusinessDay(2);
+        //   return undefined; // cannot be used to calculate lead time
+    } else {
+        // find last date
+        var a = ticket.journal[ticket.journal.length - 1];
+        //xx assert(a.new_value === "Done");
+        endDate = a.date;
+    }
+
+    var diffDay = tl.calcBusinessDays(startDate, endDate);
+    var lead_time = diffDay;
+    return lead_time;
+
+};
+
+
+function _progress_bar(ticket, timeline) {
+    "use strict";
+    var ret = "";
+    if (ticket.id === 133) {
+        //xx console.log("xxxxx ",ticket);
+    }
+    var found_done  = false;
+    for (var t in timeline) {
+        var d = timeline[t];
+        var s = ticket.find_status_at_date(d);
+        if (s === undefined) {
+            ret = ret + "?"
+        } else {
+            var c = s.substring(0, 1);
+            c  = (s === 'unknown' ) ? '.' : c;
+            if ( c === 'D') {
+                if (found_done) {
+                    c = '.';
+                } else {
+                    found_done = true;
+                }
+            } else {
+                found_done =false;
+            }
+            ret = ret + c
+        }
+    }
+    return ret;
+}
+
+WorkItem.prototype.progress_bar = function (timeline) {
+    return _progress_bar(this, timeline);
+};
+
+
+
+function sort_work_item_map(map) {
+  "use strict";
+  function compare_string(a, b) {
+    return a.localeCompare(b);
+  }
+
+  function compare_number(a, b) {
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return 0;
+  }
+
+  function compare_us(e1, e2) {
+//    return compare_string(e1.fixed_version,e2.fixed_version);
+    if (e1.current_status === "Done" && e2.current_status !== "Done") return -1;
+    if (e2.current_status === "Done" && e1.current_status !== "Done") return 1;
+
+    if (e1.unplanned && !e2.unplanned) {
+      return   1;
+    }
+    if (!e1.unplanned && e2.unplanned) {
+      return  -1;
+    }
+    if (e1.unplanned && e2.unplanned) {
+      // both issues are unplanned, we don't care about the order
+      return 0;
+    }
+
+    var v = compare_string(e1.fixed_version, e2.fixed_version);
+    if (v !== 0) return v;
+
+//    var v2 = compare_number(get_adjusted_raw_done_ratio(e1),get_adjusted_raw_done_ratio(e2));
+//    if(v2!==0) return v2;
+
+
+    var v3 = compare_number(e2.percent_done(), e1.percent_done());
+    if (v3 !== 0) return v3;
+    var v4 = compare_string(e1.current_status, e2.current_status);
+    if (v4 !== 0) return v4;
+    return v4;
+  }
+
+  var array = [];
+  map.forEach(function (us) {
+    array.push(us);
+  });
+
+  array = array.sort(compare_us);
+  return array;
+}
+
+WorkItem.prototype.sort_user_stories = function () {
+  return sort_work_item_map(this.children);
+}
+
+WorkItem.prototype.sort_defects = function () {
+  return sort_work_item_map(this.defects);
+}
+exports.WorkItem = WorkItem;
+
+
+},{"./hashmap":43,"./timeline":52,"./today":53,"assert":2}],56:[function(require,module,exports){
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+var assert = require("assert");
+
+function get_projet_names(tickets) {
+    var projects = {};
+    tickets.forEach(function (ticket) {
+        projects[ticket.project] = "a";
+    });
+    return Object.keys(projects);
+}
+
+
+function search(tickets, get_value, comp_func) {
+    if (tickets.length === 0) {
+        return null;
+    }
+    assert(tickets.length > 0);
+    return tickets
+        .map(get_value)
+        .reduce(function (previousValue, currentValue, index, array) {
+            return comp_func(currentValue, previousValue) ? currentValue : previousValue;
+        }, get_value(tickets[0]));
+}
+
+function get_last_updated_date(tickets) {
+    function ref_date(ticket) {
+        return new Date(ticket.updated_on);
+    };
+    function comp(currentDate, previousDate) {
+        return currentDate.getTime() > previousDate.getTime();
+    }
+
+    return search(tickets, ref_date, comp);
+}
+
+function get_start_date(tickets) {
+    function ref_date(ticket) {
+        return new Date(ticket.created_on);
+    };
+    function comp(currentDate, previousDate) {
+        return currentDate.getTime() < previousDate.getTime();
+    }
+
+    return search(tickets, ref_date, comp);
+}
+exports.get_start_date = get_start_date;
+exports.get_projet_names = get_projet_names;
+exports.get_last_updated_date = get_last_updated_date;
+
+},{"assert":2}],57:[function(require,module,exports){
+/*global exports,require*/
+var lib = require("./lib/serialijse");
+exports.serialize = lib.serialize;
+exports.deserialize = lib.deserialize;
+exports.serializeZ = lib.serializeZ;
+exports.deserializeZ = lib.deserializeZ;
+exports.declarePersistable = lib.declarePersistable;
+
+},{"./lib/serialijse":58}],58:[function(require,module,exports){
+/*global exports*/
+(function () {
+    "use strict";
+    var assert = require("assert"),
+        _ = require("underscore");
+
+    var g_global = {};
+
+    function declarePersistable(constructor) {
+        var className = constructor.prototype.constructor.name;
+        if (g_global.hasOwnProperty(className)) {
+            throw new Error(" class " + className + " already registered");
+        }
+        assert(!g_global.hasOwnProperty(className));
+        g_global[className] = constructor;
+    }
+
+
+    function serialize(object) {
+
+        assert(object !== undefined,"serialize: expect a valid object to serialize ");
+
+        var index = [];
+        var objects = [];
+
+        function add_object_in_index(obj, serializing_data) {
+            var id = index.length;
+            obj.____index = id;
+            index.push(serializing_data);
+            objects.push(obj);
+
+            return id;
+        }
+
+        function find_object(obj) {
+            if (obj.____index !== undefined) {
+                assert(objects[obj.____index] === obj);
+                return obj.____index;
+            }
+            return -1;
+        }
+
+        function _serialize_object(serializingObject, object) {
+
+            assert(object !== undefined);
+
+
+            var className = object.constructor.name, s, v, id;
+
+            // j => json object to follow
+            // d => date
+            // a => array
+            // o => class  { c: className d: data }
+            // @ => already serialized object
+            if (className === "Object") {
+                // default JSON object
+                serializingObject["j"] = object;
+                return;
+            }
+            if (className === "Array") {
+                serializingObject["a"] = object.map(_serialize);
+                return;
+            }
+            if (className === "Date") {
+                serializingObject["d"] = object.toUTCString();
+                return;
+            }
+
+            if (!g_global.hasOwnProperty(className)) {
+                throw new Error("class " + className + " is not registered in class Factory - deserialization will not be possible");
+            }
+
+            // check if the object has already been serialized
+            id = find_object(object);
+
+            if (id === -1) { // not found
+                // object hasn't yet been serialized
+                s = {
+                    c: className,
+                    d: {}
+                };
+
+                id = add_object_in_index(object, s);
+
+                for (v in object) {
+                    if (object.hasOwnProperty(v) && v !== '____index') {
+                        if (object[v] !== null) {
+                            s.d[v] = _serialize(object[v]);
+                        }
+                    }
+                }
+            }
+            serializingObject.o = id;
+            return serializingObject;
+        }
+
+        function _serialize(object) {
+
+            if (object === undefined) {
+                return undefined;
+            }
+
+            var serializingObject = {};
+
+            switch (typeof object) {
+                case 'number':
+                case 'boolean':
+                case 'string':
+                    // basic type
+                    return object;
+                case 'object':
+                    _serialize_object(serializingObject, object, index);
+                    break;
+                default:
+                    throw new Error("invalid typeof " + typeof object + " " + JSON.stringify(object, null, " "));
+            }
+
+            return serializingObject;
+        }
+
+        var obj = _serialize(object);
+        // unset temporary ___index properties
+        objects.forEach(function (e) {
+            delete e.____index;
+        });
+
+        return JSON.stringify([index, obj]);// ,null," ");
+    }
+
+
+    function deserialize(serializationString) {
+
+
+        var data;
+        if (typeof serializationString === 'string') {
+            data = JSON.parse(serializationString);
+        } else if (typeof serializationString ==='object') {
+            data = serializationString;
+        }
+        var index = data[0],
+            obj = data[1],
+            cache = [];
+
+        function deserialize_node_or_value(node) {
+            if ("object" === typeof node) {
+                return deserialize_node(node);
+            }
+            return node;
+        }
+
+        function deserialize_node(node) {
+            // special treatment
+            if (!node) return null;
+
+            if (node.hasOwnProperty("d")) {
+                return new Date(node.d);
+            } else if (node.hasOwnProperty("j")) {
+                return node.j;
+            } else if (node.hasOwnProperty("o")) {
+
+                var object_id = node.o;
+                if (cache[object_id] !== undefined) {
+                    return cache[object_id];
+                }
+                var serializing_data = index[object_id];
+
+                var cache_object = _deserialize_object(serializing_data, object_id);
+                assert(cache[object_id] === cache_object);
+                return  cache_object;
+
+            } else if (node.hasOwnProperty("a")) {
+                // return _deserialize_object(node.o);
+                var arr = node.a.map(deserialize_node_or_value);
+                return arr;
+            }
+            throw new Error("Unsupported deserialize_node" + JSON.stringify(node));
+        }
+
+        function _deserialize_object(object_definition, object_id) {
+
+            var constructor, obj, data, v, value, className;
+
+            assert(object_definition.c);
+            assert(object_definition.d);
+
+            className = object_definition.c;
+            data = object_definition.d;
+
+            constructor = g_global[className];
+            if (!constructor) {
+                throw new Error(" Cannot find constructor to deserialize class of type" + className + ". use declarePersistable(Constructor)");
+
+            }
+            assert(_.isFunction(constructor));
+
+            obj = new constructor();
+
+            cache[object_id] = obj;
+            for (v in data) {
+                if (data.hasOwnProperty(v)) {
+                    obj[v] = deserialize_node_or_value(data[v]);
+                }
+            }
+            return obj;
+        }
+
+
+        return deserialize_node(obj);
+    }
+
+    module.exports.deserialize = deserialize;
+    module.exports.serialize = serialize;
+    module.exports.declarePersistable = declarePersistable;
+
+    module.exports.serializeZ = function (obj, callback) {
+        var zlib = require("zlib");
+        var str = serialize(obj);
+        zlib.deflate(str, function (err, buff) {
+            if (err) {
+                return callback(err);
+            }
+            callback(null, buff);
+        });
+
+    }
+    module.exports.deserializeZ = function (data, callback) {
+
+        var zlib = require("zlib");
+        zlib.inflate(data, function (err, buff) {
+            if (err) {
+                return callback(err);
+            }
+            callback(null, deserialize(buff.toString()));
+        });
+
+    }
+
+}());
+
+
+},{"assert":2,"underscore":59,"zlib":17}],59:[function(require,module,exports){
+//     Underscore.js 1.6.0
+//     http://underscorejs.org
+//     (c) 2009-2014 Jeremy Ashkenas, DocumentCloud and Investigative Reporters & Editors
+//     Underscore may be freely distributed under the MIT license.
+
+(function() {
+
+  // Baseline setup
+  // --------------
+
+  // Establish the root object, `window` in the browser, or `exports` on the server.
+  var root = this;
+
+  // Save the previous value of the `_` variable.
+  var previousUnderscore = root._;
+
+  // Establish the object that gets returned to break out of a loop iteration.
+  var breaker = {};
+
+  // Save bytes in the minified (but not gzipped) version:
+  var ArrayProto = Array.prototype, ObjProto = Object.prototype, FuncProto = Function.prototype;
+
+  // Create quick reference variables for speed access to core prototypes.
+  var
+    push             = ArrayProto.push,
+    slice            = ArrayProto.slice,
+    concat           = ArrayProto.concat,
+    toString         = ObjProto.toString,
+    hasOwnProperty   = ObjProto.hasOwnProperty;
+
+  // All **ECMAScript 5** native function implementations that we hope to use
+  // are declared here.
+  var
+    nativeForEach      = ArrayProto.forEach,
+    nativeMap          = ArrayProto.map,
+    nativeReduce       = ArrayProto.reduce,
+    nativeReduceRight  = ArrayProto.reduceRight,
+    nativeFilter       = ArrayProto.filter,
+    nativeEvery        = ArrayProto.every,
+    nativeSome         = ArrayProto.some,
+    nativeIndexOf      = ArrayProto.indexOf,
+    nativeLastIndexOf  = ArrayProto.lastIndexOf,
+    nativeIsArray      = Array.isArray,
+    nativeKeys         = Object.keys,
+    nativeBind         = FuncProto.bind;
+
+  // Create a safe reference to the Underscore object for use below.
+  var _ = function(obj) {
+    if (obj instanceof _) return obj;
+    if (!(this instanceof _)) return new _(obj);
+    this._wrapped = obj;
+  };
+
+  // Export the Underscore object for **Node.js**, with
+  // backwards-compatibility for the old `require()` API. If we're in
+  // the browser, add `_` as a global object via a string identifier,
+  // for Closure Compiler "advanced" mode.
+  if (typeof exports !== 'undefined') {
+    if (typeof module !== 'undefined' && module.exports) {
+      exports = module.exports = _;
+    }
+    exports._ = _;
+  } else {
+    root._ = _;
+  }
+
+  // Current version.
+  _.VERSION = '1.6.0';
+
+  // Collection Functions
+  // --------------------
+
+  // The cornerstone, an `each` implementation, aka `forEach`.
+  // Handles objects with the built-in `forEach`, arrays, and raw objects.
+  // Delegates to **ECMAScript 5**'s native `forEach` if available.
+  var each = _.each = _.forEach = function(obj, iterator, context) {
+    if (obj == null) return obj;
+    if (nativeForEach && obj.forEach === nativeForEach) {
+      obj.forEach(iterator, context);
+    } else if (obj.length === +obj.length) {
+      for (var i = 0, length = obj.length; i < length; i++) {
+        if (iterator.call(context, obj[i], i, obj) === breaker) return;
+      }
+    } else {
+      var keys = _.keys(obj);
+      for (var i = 0, length = keys.length; i < length; i++) {
+        if (iterator.call(context, obj[keys[i]], keys[i], obj) === breaker) return;
+      }
+    }
+    return obj;
+  };
+
+  // Return the results of applying the iterator to each element.
+  // Delegates to **ECMAScript 5**'s native `map` if available.
+  _.map = _.collect = function(obj, iterator, context) {
+    var results = [];
+    if (obj == null) return results;
+    if (nativeMap && obj.map === nativeMap) return obj.map(iterator, context);
+    each(obj, function(value, index, list) {
+      results.push(iterator.call(context, value, index, list));
+    });
+    return results;
+  };
+
+  var reduceError = 'Reduce of empty array with no initial value';
+
+  // **Reduce** builds up a single result from a list of values, aka `inject`,
+  // or `foldl`. Delegates to **ECMAScript 5**'s native `reduce` if available.
+  _.reduce = _.foldl = _.inject = function(obj, iterator, memo, context) {
+    var initial = arguments.length > 2;
+    if (obj == null) obj = [];
+    if (nativeReduce && obj.reduce === nativeReduce) {
+      if (context) iterator = _.bind(iterator, context);
+      return initial ? obj.reduce(iterator, memo) : obj.reduce(iterator);
+    }
+    each(obj, function(value, index, list) {
+      if (!initial) {
+        memo = value;
+        initial = true;
+      } else {
+        memo = iterator.call(context, memo, value, index, list);
+      }
+    });
+    if (!initial) throw new TypeError(reduceError);
+    return memo;
+  };
+
+  // The right-associative version of reduce, also known as `foldr`.
+  // Delegates to **ECMAScript 5**'s native `reduceRight` if available.
+  _.reduceRight = _.foldr = function(obj, iterator, memo, context) {
+    var initial = arguments.length > 2;
+    if (obj == null) obj = [];
+    if (nativeReduceRight && obj.reduceRight === nativeReduceRight) {
+      if (context) iterator = _.bind(iterator, context);
+      return initial ? obj.reduceRight(iterator, memo) : obj.reduceRight(iterator);
+    }
+    var length = obj.length;
+    if (length !== +length) {
+      var keys = _.keys(obj);
+      length = keys.length;
+    }
+    each(obj, function(value, index, list) {
+      index = keys ? keys[--length] : --length;
+      if (!initial) {
+        memo = obj[index];
+        initial = true;
+      } else {
+        memo = iterator.call(context, memo, obj[index], index, list);
+      }
+    });
+    if (!initial) throw new TypeError(reduceError);
+    return memo;
+  };
+
+  // Return the first value which passes a truth test. Aliased as `detect`.
+  _.find = _.detect = function(obj, predicate, context) {
+    var result;
+    any(obj, function(value, index, list) {
+      if (predicate.call(context, value, index, list)) {
+        result = value;
+        return true;
+      }
+    });
+    return result;
+  };
+
+  // Return all the elements that pass a truth test.
+  // Delegates to **ECMAScript 5**'s native `filter` if available.
+  // Aliased as `select`.
+  _.filter = _.select = function(obj, predicate, context) {
+    var results = [];
+    if (obj == null) return results;
+    if (nativeFilter && obj.filter === nativeFilter) return obj.filter(predicate, context);
+    each(obj, function(value, index, list) {
+      if (predicate.call(context, value, index, list)) results.push(value);
+    });
+    return results;
+  };
+
+  // Return all the elements for which a truth test fails.
+  _.reject = function(obj, predicate, context) {
+    return _.filter(obj, function(value, index, list) {
+      return !predicate.call(context, value, index, list);
+    }, context);
+  };
+
+  // Determine whether all of the elements match a truth test.
+  // Delegates to **ECMAScript 5**'s native `every` if available.
+  // Aliased as `all`.
+  _.every = _.all = function(obj, predicate, context) {
+    predicate || (predicate = _.identity);
+    var result = true;
+    if (obj == null) return result;
+    if (nativeEvery && obj.every === nativeEvery) return obj.every(predicate, context);
+    each(obj, function(value, index, list) {
+      if (!(result = result && predicate.call(context, value, index, list))) return breaker;
+    });
+    return !!result;
+  };
+
+  // Determine if at least one element in the object matches a truth test.
+  // Delegates to **ECMAScript 5**'s native `some` if available.
+  // Aliased as `any`.
+  var any = _.some = _.any = function(obj, predicate, context) {
+    predicate || (predicate = _.identity);
+    var result = false;
+    if (obj == null) return result;
+    if (nativeSome && obj.some === nativeSome) return obj.some(predicate, context);
+    each(obj, function(value, index, list) {
+      if (result || (result = predicate.call(context, value, index, list))) return breaker;
+    });
+    return !!result;
+  };
+
+  // Determine if the array or object contains a given value (using `===`).
+  // Aliased as `include`.
+  _.contains = _.include = function(obj, target) {
+    if (obj == null) return false;
+    if (nativeIndexOf && obj.indexOf === nativeIndexOf) return obj.indexOf(target) != -1;
+    return any(obj, function(value) {
+      return value === target;
+    });
+  };
+
+  // Invoke a method (with arguments) on every item in a collection.
+  _.invoke = function(obj, method) {
+    var args = slice.call(arguments, 2);
+    var isFunc = _.isFunction(method);
+    return _.map(obj, function(value) {
+      return (isFunc ? method : value[method]).apply(value, args);
+    });
+  };
+
+  // Convenience version of a common use case of `map`: fetching a property.
+  _.pluck = function(obj, key) {
+    return _.map(obj, _.property(key));
+  };
+
+  // Convenience version of a common use case of `filter`: selecting only objects
+  // containing specific `key:value` pairs.
+  _.where = function(obj, attrs) {
+    return _.filter(obj, _.matches(attrs));
+  };
+
+  // Convenience version of a common use case of `find`: getting the first object
+  // containing specific `key:value` pairs.
+  _.findWhere = function(obj, attrs) {
+    return _.find(obj, _.matches(attrs));
+  };
+
+  // Return the maximum element or (element-based computation).
+  // Can't optimize arrays of integers longer than 65,535 elements.
+  // See [WebKit Bug 80797](https://bugs.webkit.org/show_bug.cgi?id=80797)
+  _.max = function(obj, iterator, context) {
+    if (!iterator && _.isArray(obj) && obj[0] === +obj[0] && obj.length < 65535) {
+      return Math.max.apply(Math, obj);
+    }
+    var result = -Infinity, lastComputed = -Infinity;
+    each(obj, function(value, index, list) {
+      var computed = iterator ? iterator.call(context, value, index, list) : value;
+      if (computed > lastComputed) {
+        result = value;
+        lastComputed = computed;
+      }
+    });
+    return result;
+  };
+
+  // Return the minimum element (or element-based computation).
+  _.min = function(obj, iterator, context) {
+    if (!iterator && _.isArray(obj) && obj[0] === +obj[0] && obj.length < 65535) {
+      return Math.min.apply(Math, obj);
+    }
+    var result = Infinity, lastComputed = Infinity;
+    each(obj, function(value, index, list) {
+      var computed = iterator ? iterator.call(context, value, index, list) : value;
+      if (computed < lastComputed) {
+        result = value;
+        lastComputed = computed;
+      }
+    });
+    return result;
+  };
+
+  // Shuffle an array, using the modern version of the
+  // [Fisher-Yates shuffle](http://en.wikipedia.org/wiki/Fisher–Yates_shuffle).
+  _.shuffle = function(obj) {
+    var rand;
+    var index = 0;
+    var shuffled = [];
+    each(obj, function(value) {
+      rand = _.random(index++);
+      shuffled[index - 1] = shuffled[rand];
+      shuffled[rand] = value;
+    });
+    return shuffled;
+  };
+
+  // Sample **n** random values from a collection.
+  // If **n** is not specified, returns a single random element.
+  // The internal `guard` argument allows it to work with `map`.
+  _.sample = function(obj, n, guard) {
+    if (n == null || guard) {
+      if (obj.length !== +obj.length) obj = _.values(obj);
+      return obj[_.random(obj.length - 1)];
+    }
+    return _.shuffle(obj).slice(0, Math.max(0, n));
+  };
+
+  // An internal function to generate lookup iterators.
+  var lookupIterator = function(value) {
+    if (value == null) return _.identity;
+    if (_.isFunction(value)) return value;
+    return _.property(value);
+  };
+
+  // Sort the object's values by a criterion produced by an iterator.
+  _.sortBy = function(obj, iterator, context) {
+    iterator = lookupIterator(iterator);
+    return _.pluck(_.map(obj, function(value, index, list) {
+      return {
+        value: value,
+        index: index,
+        criteria: iterator.call(context, value, index, list)
+      };
+    }).sort(function(left, right) {
+      var a = left.criteria;
+      var b = right.criteria;
+      if (a !== b) {
+        if (a > b || a === void 0) return 1;
+        if (a < b || b === void 0) return -1;
+      }
+      return left.index - right.index;
+    }), 'value');
+  };
+
+  // An internal function used for aggregate "group by" operations.
+  var group = function(behavior) {
+    return function(obj, iterator, context) {
+      var result = {};
+      iterator = lookupIterator(iterator);
+      each(obj, function(value, index) {
+        var key = iterator.call(context, value, index, obj);
+        behavior(result, key, value);
+      });
+      return result;
+    };
+  };
+
+  // Groups the object's values by a criterion. Pass either a string attribute
+  // to group by, or a function that returns the criterion.
+  _.groupBy = group(function(result, key, value) {
+    _.has(result, key) ? result[key].push(value) : result[key] = [value];
+  });
+
+  // Indexes the object's values by a criterion, similar to `groupBy`, but for
+  // when you know that your index values will be unique.
+  _.indexBy = group(function(result, key, value) {
+    result[key] = value;
+  });
+
+  // Counts instances of an object that group by a certain criterion. Pass
+  // either a string attribute to count by, or a function that returns the
+  // criterion.
+  _.countBy = group(function(result, key) {
+    _.has(result, key) ? result[key]++ : result[key] = 1;
+  });
+
+  // Use a comparator function to figure out the smallest index at which
+  // an object should be inserted so as to maintain order. Uses binary search.
+  _.sortedIndex = function(array, obj, iterator, context) {
+    iterator = lookupIterator(iterator);
+    var value = iterator.call(context, obj);
+    var low = 0, high = array.length;
+    while (low < high) {
+      var mid = (low + high) >>> 1;
+      iterator.call(context, array[mid]) < value ? low = mid + 1 : high = mid;
+    }
+    return low;
+  };
+
+  // Safely create a real, live array from anything iterable.
+  _.toArray = function(obj) {
+    if (!obj) return [];
+    if (_.isArray(obj)) return slice.call(obj);
+    if (obj.length === +obj.length) return _.map(obj, _.identity);
+    return _.values(obj);
+  };
+
+  // Return the number of elements in an object.
+  _.size = function(obj) {
+    if (obj == null) return 0;
+    return (obj.length === +obj.length) ? obj.length : _.keys(obj).length;
+  };
+
+  // Array Functions
+  // ---------------
+
+  // Get the first element of an array. Passing **n** will return the first N
+  // values in the array. Aliased as `head` and `take`. The **guard** check
+  // allows it to work with `_.map`.
+  _.first = _.head = _.take = function(array, n, guard) {
+    if (array == null) return void 0;
+    if ((n == null) || guard) return array[0];
+    if (n < 0) return [];
+    return slice.call(array, 0, n);
+  };
+
+  // Returns everything but the last entry of the array. Especially useful on
+  // the arguments object. Passing **n** will return all the values in
+  // the array, excluding the last N. The **guard** check allows it to work with
+  // `_.map`.
+  _.initial = function(array, n, guard) {
+    return slice.call(array, 0, array.length - ((n == null) || guard ? 1 : n));
+  };
+
+  // Get the last element of an array. Passing **n** will return the last N
+  // values in the array. The **guard** check allows it to work with `_.map`.
+  _.last = function(array, n, guard) {
+    if (array == null) return void 0;
+    if ((n == null) || guard) return array[array.length - 1];
+    return slice.call(array, Math.max(array.length - n, 0));
+  };
+
+  // Returns everything but the first entry of the array. Aliased as `tail` and `drop`.
+  // Especially useful on the arguments object. Passing an **n** will return
+  // the rest N values in the array. The **guard**
+  // check allows it to work with `_.map`.
+  _.rest = _.tail = _.drop = function(array, n, guard) {
+    return slice.call(array, (n == null) || guard ? 1 : n);
+  };
+
+  // Trim out all falsy values from an array.
+  _.compact = function(array) {
+    return _.filter(array, _.identity);
+  };
+
+  // Internal implementation of a recursive `flatten` function.
+  var flatten = function(input, shallow, output) {
+    if (shallow && _.every(input, _.isArray)) {
+      return concat.apply(output, input);
+    }
+    each(input, function(value) {
+      if (_.isArray(value) || _.isArguments(value)) {
+        shallow ? push.apply(output, value) : flatten(value, shallow, output);
+      } else {
+        output.push(value);
+      }
+    });
+    return output;
+  };
+
+  // Flatten out an array, either recursively (by default), or just one level.
+  _.flatten = function(array, shallow) {
+    return flatten(array, shallow, []);
+  };
+
+  // Return a version of the array that does not contain the specified value(s).
+  _.without = function(array) {
+    return _.difference(array, slice.call(arguments, 1));
+  };
+
+  // Split an array into two arrays: one whose elements all satisfy the given
+  // predicate, and one whose elements all do not satisfy the predicate.
+  _.partition = function(array, predicate) {
+    var pass = [], fail = [];
+    each(array, function(elem) {
+      (predicate(elem) ? pass : fail).push(elem);
+    });
+    return [pass, fail];
+  };
+
+  // Produce a duplicate-free version of the array. If the array has already
+  // been sorted, you have the option of using a faster algorithm.
+  // Aliased as `unique`.
+  _.uniq = _.unique = function(array, isSorted, iterator, context) {
+    if (_.isFunction(isSorted)) {
+      context = iterator;
+      iterator = isSorted;
+      isSorted = false;
+    }
+    var initial = iterator ? _.map(array, iterator, context) : array;
+    var results = [];
+    var seen = [];
+    each(initial, function(value, index) {
+      if (isSorted ? (!index || seen[seen.length - 1] !== value) : !_.contains(seen, value)) {
+        seen.push(value);
+        results.push(array[index]);
+      }
+    });
+    return results;
+  };
+
+  // Produce an array that contains the union: each distinct element from all of
+  // the passed-in arrays.
+  _.union = function() {
+    return _.uniq(_.flatten(arguments, true));
+  };
+
+  // Produce an array that contains every item shared between all the
+  // passed-in arrays.
+  _.intersection = function(array) {
+    var rest = slice.call(arguments, 1);
+    return _.filter(_.uniq(array), function(item) {
+      return _.every(rest, function(other) {
+        return _.contains(other, item);
+      });
+    });
+  };
+
+  // Take the difference between one array and a number of other arrays.
+  // Only the elements present in just the first array will remain.
+  _.difference = function(array) {
+    var rest = concat.apply(ArrayProto, slice.call(arguments, 1));
+    return _.filter(array, function(value){ return !_.contains(rest, value); });
+  };
+
+  // Zip together multiple lists into a single array -- elements that share
+  // an index go together.
+  _.zip = function() {
+    var length = _.max(_.pluck(arguments, 'length').concat(0));
+    var results = new Array(length);
+    for (var i = 0; i < length; i++) {
+      results[i] = _.pluck(arguments, '' + i);
+    }
+    return results;
+  };
+
+  // Converts lists into objects. Pass either a single array of `[key, value]`
+  // pairs, or two parallel arrays of the same length -- one of keys, and one of
+  // the corresponding values.
+  _.object = function(list, values) {
+    if (list == null) return {};
+    var result = {};
+    for (var i = 0, length = list.length; i < length; i++) {
+      if (values) {
+        result[list[i]] = values[i];
+      } else {
+        result[list[i][0]] = list[i][1];
+      }
+    }
+    return result;
+  };
+
+  // If the browser doesn't supply us with indexOf (I'm looking at you, **MSIE**),
+  // we need this function. Return the position of the first occurrence of an
+  // item in an array, or -1 if the item is not included in the array.
+  // Delegates to **ECMAScript 5**'s native `indexOf` if available.
+  // If the array is large and already in sort order, pass `true`
+  // for **isSorted** to use binary search.
+  _.indexOf = function(array, item, isSorted) {
+    if (array == null) return -1;
+    var i = 0, length = array.length;
+    if (isSorted) {
+      if (typeof isSorted == 'number') {
+        i = (isSorted < 0 ? Math.max(0, length + isSorted) : isSorted);
+      } else {
+        i = _.sortedIndex(array, item);
+        return array[i] === item ? i : -1;
+      }
+    }
+    if (nativeIndexOf && array.indexOf === nativeIndexOf) return array.indexOf(item, isSorted);
+    for (; i < length; i++) if (array[i] === item) return i;
+    return -1;
+  };
+
+  // Delegates to **ECMAScript 5**'s native `lastIndexOf` if available.
+  _.lastIndexOf = function(array, item, from) {
+    if (array == null) return -1;
+    var hasIndex = from != null;
+    if (nativeLastIndexOf && array.lastIndexOf === nativeLastIndexOf) {
+      return hasIndex ? array.lastIndexOf(item, from) : array.lastIndexOf(item);
+    }
+    var i = (hasIndex ? from : array.length);
+    while (i--) if (array[i] === item) return i;
+    return -1;
+  };
+
+  // Generate an integer Array containing an arithmetic progression. A port of
+  // the native Python `range()` function. See
+  // [the Python documentation](http://docs.python.org/library/functions.html#range).
+  _.range = function(start, stop, step) {
+    if (arguments.length <= 1) {
+      stop = start || 0;
+      start = 0;
+    }
+    step = arguments[2] || 1;
+
+    var length = Math.max(Math.ceil((stop - start) / step), 0);
+    var idx = 0;
+    var range = new Array(length);
+
+    while(idx < length) {
+      range[idx++] = start;
+      start += step;
+    }
+
+    return range;
+  };
+
+  // Function (ahem) Functions
+  // ------------------
+
+  // Reusable constructor function for prototype setting.
+  var ctor = function(){};
+
+  // Create a function bound to a given object (assigning `this`, and arguments,
+  // optionally). Delegates to **ECMAScript 5**'s native `Function.bind` if
+  // available.
+  _.bind = function(func, context) {
+    var args, bound;
+    if (nativeBind && func.bind === nativeBind) return nativeBind.apply(func, slice.call(arguments, 1));
+    if (!_.isFunction(func)) throw new TypeError;
+    args = slice.call(arguments, 2);
+    return bound = function() {
+      if (!(this instanceof bound)) return func.apply(context, args.concat(slice.call(arguments)));
+      ctor.prototype = func.prototype;
+      var self = new ctor;
+      ctor.prototype = null;
+      var result = func.apply(self, args.concat(slice.call(arguments)));
+      if (Object(result) === result) return result;
+      return self;
+    };
+  };
+
+  // Partially apply a function by creating a version that has had some of its
+  // arguments pre-filled, without changing its dynamic `this` context. _ acts
+  // as a placeholder, allowing any combination of arguments to be pre-filled.
+  _.partial = function(func) {
+    var boundArgs = slice.call(arguments, 1);
+    return function() {
+      var position = 0;
+      var args = boundArgs.slice();
+      for (var i = 0, length = args.length; i < length; i++) {
+        if (args[i] === _) args[i] = arguments[position++];
+      }
+      while (position < arguments.length) args.push(arguments[position++]);
+      return func.apply(this, args);
+    };
+  };
+
+  // Bind a number of an object's methods to that object. Remaining arguments
+  // are the method names to be bound. Useful for ensuring that all callbacks
+  // defined on an object belong to it.
+  _.bindAll = function(obj) {
+    var funcs = slice.call(arguments, 1);
+    if (funcs.length === 0) throw new Error('bindAll must be passed function names');
+    each(funcs, function(f) { obj[f] = _.bind(obj[f], obj); });
+    return obj;
+  };
+
+  // Memoize an expensive function by storing its results.
+  _.memoize = function(func, hasher) {
+    var memo = {};
+    hasher || (hasher = _.identity);
+    return function() {
+      var key = hasher.apply(this, arguments);
+      return _.has(memo, key) ? memo[key] : (memo[key] = func.apply(this, arguments));
+    };
+  };
+
+  // Delays a function for the given number of milliseconds, and then calls
+  // it with the arguments supplied.
+  _.delay = function(func, wait) {
+    var args = slice.call(arguments, 2);
+    return setTimeout(function(){ return func.apply(null, args); }, wait);
+  };
+
+  // Defers a function, scheduling it to run after the current call stack has
+  // cleared.
+  _.defer = function(func) {
+    return _.delay.apply(_, [func, 1].concat(slice.call(arguments, 1)));
+  };
+
+  // Returns a function, that, when invoked, will only be triggered at most once
+  // during a given window of time. Normally, the throttled function will run
+  // as much as it can, without ever going more than once per `wait` duration;
+  // but if you'd like to disable the execution on the leading edge, pass
+  // `{leading: false}`. To disable execution on the trailing edge, ditto.
+  _.throttle = function(func, wait, options) {
+    var context, args, result;
+    var timeout = null;
+    var previous = 0;
+    options || (options = {});
+    var later = function() {
+      previous = options.leading === false ? 0 : _.now();
+      timeout = null;
+      result = func.apply(context, args);
+      context = args = null;
+    };
+    return function() {
+      var now = _.now();
+      if (!previous && options.leading === false) previous = now;
+      var remaining = wait - (now - previous);
+      context = this;
+      args = arguments;
+      if (remaining <= 0) {
+        clearTimeout(timeout);
+        timeout = null;
+        previous = now;
+        result = func.apply(context, args);
+        context = args = null;
+      } else if (!timeout && options.trailing !== false) {
+        timeout = setTimeout(later, remaining);
+      }
+      return result;
+    };
+  };
+
+  // Returns a function, that, as long as it continues to be invoked, will not
+  // be triggered. The function will be called after it stops being called for
+  // N milliseconds. If `immediate` is passed, trigger the function on the
+  // leading edge, instead of the trailing.
+  _.debounce = function(func, wait, immediate) {
+    var timeout, args, context, timestamp, result;
+
+    var later = function() {
+      var last = _.now() - timestamp;
+      if (last < wait) {
+        timeout = setTimeout(later, wait - last);
+      } else {
+        timeout = null;
+        if (!immediate) {
+          result = func.apply(context, args);
+          context = args = null;
+        }
+      }
+    };
+
+    return function() {
+      context = this;
+      args = arguments;
+      timestamp = _.now();
+      var callNow = immediate && !timeout;
+      if (!timeout) {
+        timeout = setTimeout(later, wait);
+      }
+      if (callNow) {
+        result = func.apply(context, args);
+        context = args = null;
+      }
+
+      return result;
+    };
+  };
+
+  // Returns a function that will be executed at most one time, no matter how
+  // often you call it. Useful for lazy initialization.
+  _.once = function(func) {
+    var ran = false, memo;
+    return function() {
+      if (ran) return memo;
+      ran = true;
+      memo = func.apply(this, arguments);
+      func = null;
+      return memo;
+    };
+  };
+
+  // Returns the first function passed as an argument to the second,
+  // allowing you to adjust arguments, run code before and after, and
+  // conditionally execute the original function.
+  _.wrap = function(func, wrapper) {
+    return _.partial(wrapper, func);
+  };
+
+  // Returns a function that is the composition of a list of functions, each
+  // consuming the return value of the function that follows.
+  _.compose = function() {
+    var funcs = arguments;
+    return function() {
+      var args = arguments;
+      for (var i = funcs.length - 1; i >= 0; i--) {
+        args = [funcs[i].apply(this, args)];
+      }
+      return args[0];
+    };
+  };
+
+  // Returns a function that will only be executed after being called N times.
+  _.after = function(times, func) {
+    return function() {
+      if (--times < 1) {
+        return func.apply(this, arguments);
+      }
+    };
+  };
+
+  // Object Functions
+  // ----------------
+
+  // Retrieve the names of an object's properties.
+  // Delegates to **ECMAScript 5**'s native `Object.keys`
+  _.keys = function(obj) {
+    if (!_.isObject(obj)) return [];
+    if (nativeKeys) return nativeKeys(obj);
+    var keys = [];
+    for (var key in obj) if (_.has(obj, key)) keys.push(key);
+    return keys;
+  };
+
+  // Retrieve the values of an object's properties.
+  _.values = function(obj) {
+    var keys = _.keys(obj);
+    var length = keys.length;
+    var values = new Array(length);
+    for (var i = 0; i < length; i++) {
+      values[i] = obj[keys[i]];
+    }
+    return values;
+  };
+
+  // Convert an object into a list of `[key, value]` pairs.
+  _.pairs = function(obj) {
+    var keys = _.keys(obj);
+    var length = keys.length;
+    var pairs = new Array(length);
+    for (var i = 0; i < length; i++) {
+      pairs[i] = [keys[i], obj[keys[i]]];
+    }
+    return pairs;
+  };
+
+  // Invert the keys and values of an object. The values must be serializable.
+  _.invert = function(obj) {
+    var result = {};
+    var keys = _.keys(obj);
+    for (var i = 0, length = keys.length; i < length; i++) {
+      result[obj[keys[i]]] = keys[i];
+    }
+    return result;
+  };
+
+  // Return a sorted list of the function names available on the object.
+  // Aliased as `methods`
+  _.functions = _.methods = function(obj) {
+    var names = [];
+    for (var key in obj) {
+      if (_.isFunction(obj[key])) names.push(key);
+    }
+    return names.sort();
+  };
+
+  // Extend a given object with all the properties in passed-in object(s).
+  _.extend = function(obj) {
+    each(slice.call(arguments, 1), function(source) {
+      if (source) {
+        for (var prop in source) {
+          obj[prop] = source[prop];
+        }
+      }
+    });
+    return obj;
+  };
+
+  // Return a copy of the object only containing the whitelisted properties.
+  _.pick = function(obj) {
+    var copy = {};
+    var keys = concat.apply(ArrayProto, slice.call(arguments, 1));
+    each(keys, function(key) {
+      if (key in obj) copy[key] = obj[key];
+    });
+    return copy;
+  };
+
+   // Return a copy of the object without the blacklisted properties.
+  _.omit = function(obj) {
+    var copy = {};
+    var keys = concat.apply(ArrayProto, slice.call(arguments, 1));
+    for (var key in obj) {
+      if (!_.contains(keys, key)) copy[key] = obj[key];
+    }
+    return copy;
+  };
+
+  // Fill in a given object with default properties.
+  _.defaults = function(obj) {
+    each(slice.call(arguments, 1), function(source) {
+      if (source) {
+        for (var prop in source) {
+          if (obj[prop] === void 0) obj[prop] = source[prop];
+        }
+      }
+    });
+    return obj;
+  };
+
+  // Create a (shallow-cloned) duplicate of an object.
+  _.clone = function(obj) {
+    if (!_.isObject(obj)) return obj;
+    return _.isArray(obj) ? obj.slice() : _.extend({}, obj);
+  };
+
+  // Invokes interceptor with the obj, and then returns obj.
+  // The primary purpose of this method is to "tap into" a method chain, in
+  // order to perform operations on intermediate results within the chain.
+  _.tap = function(obj, interceptor) {
+    interceptor(obj);
+    return obj;
+  };
+
+  // Internal recursive comparison function for `isEqual`.
+  var eq = function(a, b, aStack, bStack) {
+    // Identical objects are equal. `0 === -0`, but they aren't identical.
+    // See the [Harmony `egal` proposal](http://wiki.ecmascript.org/doku.php?id=harmony:egal).
+    if (a === b) return a !== 0 || 1 / a == 1 / b;
+    // A strict comparison is necessary because `null == undefined`.
+    if (a == null || b == null) return a === b;
+    // Unwrap any wrapped objects.
+    if (a instanceof _) a = a._wrapped;
+    if (b instanceof _) b = b._wrapped;
+    // Compare `[[Class]]` names.
+    var className = toString.call(a);
+    if (className != toString.call(b)) return false;
+    switch (className) {
+      // Strings, numbers, dates, and booleans are compared by value.
+      case '[object String]':
+        // Primitives and their corresponding object wrappers are equivalent; thus, `"5"` is
+        // equivalent to `new String("5")`.
+        return a == String(b);
+      case '[object Number]':
+        // `NaN`s are equivalent, but non-reflexive. An `egal` comparison is performed for
+        // other numeric values.
+        return a != +a ? b != +b : (a == 0 ? 1 / a == 1 / b : a == +b);
+      case '[object Date]':
+      case '[object Boolean]':
+        // Coerce dates and booleans to numeric primitive values. Dates are compared by their
+        // millisecond representations. Note that invalid dates with millisecond representations
+        // of `NaN` are not equivalent.
+        return +a == +b;
+      // RegExps are compared by their source patterns and flags.
+      case '[object RegExp]':
+        return a.source == b.source &&
+               a.global == b.global &&
+               a.multiline == b.multiline &&
+               a.ignoreCase == b.ignoreCase;
+    }
+    if (typeof a != 'object' || typeof b != 'object') return false;
+    // Assume equality for cyclic structures. The algorithm for detecting cyclic
+    // structures is adapted from ES 5.1 section 15.12.3, abstract operation `JO`.
+    var length = aStack.length;
+    while (length--) {
+      // Linear search. Performance is inversely proportional to the number of
+      // unique nested structures.
+      if (aStack[length] == a) return bStack[length] == b;
+    }
+    // Objects with different constructors are not equivalent, but `Object`s
+    // from different frames are.
+    var aCtor = a.constructor, bCtor = b.constructor;
+    if (aCtor !== bCtor && !(_.isFunction(aCtor) && (aCtor instanceof aCtor) &&
+                             _.isFunction(bCtor) && (bCtor instanceof bCtor))
+                        && ('constructor' in a && 'constructor' in b)) {
+      return false;
+    }
+    // Add the first object to the stack of traversed objects.
+    aStack.push(a);
+    bStack.push(b);
+    var size = 0, result = true;
+    // Recursively compare objects and arrays.
+    if (className == '[object Array]') {
+      // Compare array lengths to determine if a deep comparison is necessary.
+      size = a.length;
+      result = size == b.length;
+      if (result) {
+        // Deep compare the contents, ignoring non-numeric properties.
+        while (size--) {
+          if (!(result = eq(a[size], b[size], aStack, bStack))) break;
+        }
+      }
+    } else {
+      // Deep compare objects.
+      for (var key in a) {
+        if (_.has(a, key)) {
+          // Count the expected number of properties.
+          size++;
+          // Deep compare each member.
+          if (!(result = _.has(b, key) && eq(a[key], b[key], aStack, bStack))) break;
+        }
+      }
+      // Ensure that both objects contain the same number of properties.
+      if (result) {
+        for (key in b) {
+          if (_.has(b, key) && !(size--)) break;
+        }
+        result = !size;
+      }
+    }
+    // Remove the first object from the stack of traversed objects.
+    aStack.pop();
+    bStack.pop();
+    return result;
+  };
+
+  // Perform a deep comparison to check if two objects are equal.
+  _.isEqual = function(a, b) {
+    return eq(a, b, [], []);
+  };
+
+  // Is a given array, string, or object empty?
+  // An "empty" object has no enumerable own-properties.
+  _.isEmpty = function(obj) {
+    if (obj == null) return true;
+    if (_.isArray(obj) || _.isString(obj)) return obj.length === 0;
+    for (var key in obj) if (_.has(obj, key)) return false;
+    return true;
+  };
+
+  // Is a given value a DOM element?
+  _.isElement = function(obj) {
+    return !!(obj && obj.nodeType === 1);
+  };
+
+  // Is a given value an array?
+  // Delegates to ECMA5's native Array.isArray
+  _.isArray = nativeIsArray || function(obj) {
+    return toString.call(obj) == '[object Array]';
+  };
+
+  // Is a given variable an object?
+  _.isObject = function(obj) {
+    return obj === Object(obj);
+  };
+
+  // Add some isType methods: isArguments, isFunction, isString, isNumber, isDate, isRegExp.
+  each(['Arguments', 'Function', 'String', 'Number', 'Date', 'RegExp'], function(name) {
+    _['is' + name] = function(obj) {
+      return toString.call(obj) == '[object ' + name + ']';
+    };
+  });
+
+  // Define a fallback version of the method in browsers (ahem, IE), where
+  // there isn't any inspectable "Arguments" type.
+  if (!_.isArguments(arguments)) {
+    _.isArguments = function(obj) {
+      return !!(obj && _.has(obj, 'callee'));
+    };
+  }
+
+  // Optimize `isFunction` if appropriate.
+  if (typeof (/./) !== 'function') {
+    _.isFunction = function(obj) {
+      return typeof obj === 'function';
+    };
+  }
+
+  // Is a given object a finite number?
+  _.isFinite = function(obj) {
+    return isFinite(obj) && !isNaN(parseFloat(obj));
+  };
+
+  // Is the given value `NaN`? (NaN is the only number which does not equal itself).
+  _.isNaN = function(obj) {
+    return _.isNumber(obj) && obj != +obj;
+  };
+
+  // Is a given value a boolean?
+  _.isBoolean = function(obj) {
+    return obj === true || obj === false || toString.call(obj) == '[object Boolean]';
+  };
+
+  // Is a given value equal to null?
+  _.isNull = function(obj) {
+    return obj === null;
+  };
+
+  // Is a given variable undefined?
+  _.isUndefined = function(obj) {
+    return obj === void 0;
+  };
+
+  // Shortcut function for checking if an object has a given property directly
+  // on itself (in other words, not on a prototype).
+  _.has = function(obj, key) {
+    return hasOwnProperty.call(obj, key);
+  };
+
+  // Utility Functions
+  // -----------------
+
+  // Run Underscore.js in *noConflict* mode, returning the `_` variable to its
+  // previous owner. Returns a reference to the Underscore object.
+  _.noConflict = function() {
+    root._ = previousUnderscore;
+    return this;
+  };
+
+  // Keep the identity function around for default iterators.
+  _.identity = function(value) {
+    return value;
+  };
+
+  _.constant = function(value) {
+    return function () {
+      return value;
+    };
+  };
+
+  _.property = function(key) {
+    return function(obj) {
+      return obj[key];
+    };
+  };
+
+  // Returns a predicate for checking whether an object has a given set of `key:value` pairs.
+  _.matches = function(attrs) {
+    return function(obj) {
+      if (obj === attrs) return true; //avoid comparing an object to itself.
+      for (var key in attrs) {
+        if (attrs[key] !== obj[key])
+          return false;
+      }
+      return true;
+    }
+  };
+
+  // Run a function **n** times.
+  _.times = function(n, iterator, context) {
+    var accum = Array(Math.max(0, n));
+    for (var i = 0; i < n; i++) accum[i] = iterator.call(context, i);
+    return accum;
+  };
+
+  // Return a random integer between min and max (inclusive).
+  _.random = function(min, max) {
+    if (max == null) {
+      max = min;
+      min = 0;
+    }
+    return min + Math.floor(Math.random() * (max - min + 1));
+  };
+
+  // A (possibly faster) way to get the current timestamp as an integer.
+  _.now = Date.now || function() { return new Date().getTime(); };
+
+  // List of HTML entities for escaping.
+  var entityMap = {
+    escape: {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#x27;'
+    }
+  };
+  entityMap.unescape = _.invert(entityMap.escape);
+
+  // Regexes containing the keys and values listed immediately above.
+  var entityRegexes = {
+    escape:   new RegExp('[' + _.keys(entityMap.escape).join('') + ']', 'g'),
+    unescape: new RegExp('(' + _.keys(entityMap.unescape).join('|') + ')', 'g')
+  };
+
+  // Functions for escaping and unescaping strings to/from HTML interpolation.
+  _.each(['escape', 'unescape'], function(method) {
+    _[method] = function(string) {
+      if (string == null) return '';
+      return ('' + string).replace(entityRegexes[method], function(match) {
+        return entityMap[method][match];
+      });
+    };
+  });
+
+  // If the value of the named `property` is a function then invoke it with the
+  // `object` as context; otherwise, return it.
+  _.result = function(object, property) {
+    if (object == null) return void 0;
+    var value = object[property];
+    return _.isFunction(value) ? value.call(object) : value;
+  };
+
+  // Add your own custom functions to the Underscore object.
+  _.mixin = function(obj) {
+    each(_.functions(obj), function(name) {
+      var func = _[name] = obj[name];
+      _.prototype[name] = function() {
+        var args = [this._wrapped];
+        push.apply(args, arguments);
+        return result.call(this, func.apply(_, args));
+      };
+    });
+  };
+
+  // Generate a unique integer id (unique within the entire client session).
+  // Useful for temporary DOM ids.
+  var idCounter = 0;
+  _.uniqueId = function(prefix) {
+    var id = ++idCounter + '';
+    return prefix ? prefix + id : id;
+  };
+
+  // By default, Underscore uses ERB-style template delimiters, change the
+  // following template settings to use alternative delimiters.
+  _.templateSettings = {
+    evaluate    : /<%([\s\S]+?)%>/g,
+    interpolate : /<%=([\s\S]+?)%>/g,
+    escape      : /<%-([\s\S]+?)%>/g
+  };
+
+  // When customizing `templateSettings`, if you don't want to define an
+  // interpolation, evaluation or escaping regex, we need one that is
+  // guaranteed not to match.
+  var noMatch = /(.)^/;
+
+  // Certain characters need to be escaped so that they can be put into a
+  // string literal.
+  var escapes = {
+    "'":      "'",
+    '\\':     '\\',
+    '\r':     'r',
+    '\n':     'n',
+    '\t':     't',
+    '\u2028': 'u2028',
+    '\u2029': 'u2029'
+  };
+
+  var escaper = /\\|'|\r|\n|\t|\u2028|\u2029/g;
+
+  // JavaScript micro-templating, similar to John Resig's implementation.
+  // Underscore templating handles arbitrary delimiters, preserves whitespace,
+  // and correctly escapes quotes within interpolated code.
+  _.template = function(text, data, settings) {
+    var render;
+    settings = _.defaults({}, settings, _.templateSettings);
+
+    // Combine delimiters into one regular expression via alternation.
+    var matcher = new RegExp([
+      (settings.escape || noMatch).source,
+      (settings.interpolate || noMatch).source,
+      (settings.evaluate || noMatch).source
+    ].join('|') + '|$', 'g');
+
+    // Compile the template source, escaping string literals appropriately.
+    var index = 0;
+    var source = "__p+='";
+    text.replace(matcher, function(match, escape, interpolate, evaluate, offset) {
+      source += text.slice(index, offset)
+        .replace(escaper, function(match) { return '\\' + escapes[match]; });
+
+      if (escape) {
+        source += "'+\n((__t=(" + escape + "))==null?'':_.escape(__t))+\n'";
+      }
+      if (interpolate) {
+        source += "'+\n((__t=(" + interpolate + "))==null?'':__t)+\n'";
+      }
+      if (evaluate) {
+        source += "';\n" + evaluate + "\n__p+='";
+      }
+      index = offset + match.length;
+      return match;
+    });
+    source += "';\n";
+
+    // If a variable is not specified, place data values in local scope.
+    if (!settings.variable) source = 'with(obj||{}){\n' + source + '}\n';
+
+    source = "var __t,__p='',__j=Array.prototype.join," +
+      "print=function(){__p+=__j.call(arguments,'');};\n" +
+      source + "return __p;\n";
+
+    try {
+      render = new Function(settings.variable || 'obj', '_', source);
+    } catch (e) {
+      e.source = source;
+      throw e;
+    }
+
+    if (data) return render(data, _);
+    var template = function(data) {
+      return render.call(this, data, _);
+    };
+
+    // Provide the compiled function source as a convenience for precompilation.
+    template.source = 'function(' + (settings.variable || 'obj') + '){\n' + source + '}';
+
+    return template;
+  };
+
+  // Add a "chain" function, which will delegate to the wrapper.
+  _.chain = function(obj) {
+    return _(obj).chain();
+  };
+
+  // OOP
+  // ---------------
+  // If Underscore is called as a function, it returns a wrapped object that
+  // can be used OO-style. This wrapper holds altered versions of all the
+  // underscore functions. Wrapped objects may be chained.
+
+  // Helper function to continue chaining intermediate results.
+  var result = function(obj) {
+    return this._chain ? _(obj).chain() : obj;
+  };
+
+  // Add all of the Underscore functions to the wrapper object.
+  _.mixin(_);
+
+  // Add all mutator Array functions to the wrapper.
+  each(['pop', 'push', 'reverse', 'shift', 'sort', 'splice', 'unshift'], function(name) {
+    var method = ArrayProto[name];
+    _.prototype[name] = function() {
+      var obj = this._wrapped;
+      method.apply(obj, arguments);
+      if ((name == 'shift' || name == 'splice') && obj.length === 0) delete obj[0];
+      return result.call(this, obj);
+    };
+  });
+
+  // Add all accessor Array functions to the wrapper.
+  each(['concat', 'join', 'slice'], function(name) {
+    var method = ArrayProto[name];
+    _.prototype[name] = function() {
+      return result.call(this, method.apply(this._wrapped, arguments));
+    };
+  });
+
+  _.extend(_.prototype, {
+
+    // Start chaining a wrapped Underscore object.
+    chain: function() {
+      this._chain = true;
+      return this;
+    },
+
+    // Extracts the result from a wrapped and chained object.
+    value: function() {
+      return this._wrapped;
+    }
+
+  });
+
+  // AMD registration happens at the end for compatibility with AMD loaders
+  // that may not enforce next-turn semantics on modules. Even though general
+  // practice for AMD registration is to be anonymous, underscore registers
+  // as a named module because, like jQuery, it is a base library that is
+  // popular enough to be bundled in a third party lib, but not be part of
+  // an AMD load request. Those cases could generate an error when an
+  // anonymous define() is called outside of a loader request.
+  if (typeof define === 'function' && define.amd) {
+    define('underscore', [], function() {
+      return _;
+    });
+  }
+}).call(this);
+
+},{}]},{},[40]);
