@@ -2,9 +2,8 @@
   "name": "redmine-kanban-core",
   "main": "redmine-kanban-core.bundle.js",
   "version": "0.0.1",
-  "homepage": "https://github.com/erossignon/redmine-kanban-core",
   "authors": [
-    "Etienne Rossignon <etienne.rossignon@gadz.org>"
+    "Etienne Rossignon etienne.rossignon@gadz.on"
   ],
   "license": "MIT",
   "ignore": [
@@ -15,8 +14,6 @@
     "test",
     "tests",
     "lib",
-    "index.js",
-  ],
-
-
+    "index.js"
+  ]
 }
