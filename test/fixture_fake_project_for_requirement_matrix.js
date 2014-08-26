@@ -64,7 +64,8 @@ exports.project= (function make_project() {
 
     var us1 = make_user_story("US1",uc2,[rq3]);
     var us2 = make_user_story("US2",uc2,[rq3,rq4]);
-    project.add_work_items([us1,us2]);
+    var us3 = make_user_story("US3",uc3,[rq5]);
+    project.add_work_items([us1,us2,us3]);
 
     return project;
 
