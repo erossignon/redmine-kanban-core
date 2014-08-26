@@ -26,29 +26,7 @@ var and = it;
            // 3 use cases
            project.use_cases.length.should.equal(3);
         });
-        //
-        //  UC1 : "use case"
-        //   |        linked with : "RQ1" , "RQ2"      <= list of nominal requirements
-        //   |
-        //   +-->UC2 : "use case"
-        //   |     +-> linked with : "RQ3" , "RQ4"      <= list of nominal requirements
-        //   |     |
-        //   |     +-> US1 "user story 1"  (parent: UC2)
-        //   |     |   |
-        //   |     |   +---- linked with "RQ3"
-        //   |     |
-        //   |     +-> US2 "user story 1"  (parent: UC2)
-        //   |     |   |
-        //   |     |   +---- linked with "RQ3" , "RQ4"
-        //   |
-        //   +-->UC3 : "use case"
-        //   |     +-> linked with : "RQ4" , "RQ5"      <= list of nominal requirements
-        //   |     |
-        //   |     +-> US3 "user story 3"  (parent: UC2)
-        //   |     |   |
-        //   |     |   +---- linked with "RQ4"
-        //
-        it("should populate the requirements collection of a workitem", function() {
+       it("should populate the requirements collection of a workitem", function() {
 
             project.associate_use_case_and_user_stories();
             project.associate_requirements();
@@ -147,9 +125,23 @@ var and = it;
         var _ = require("underscore");
         function extract_uncovered_requirements(project,work_item) {
             // extract the requirements that should have been covered for work_item but are not covered
+
+            var requested_requirements = extract_requested_requirements(project,work_item);
+            var covered_requirements = extract_covered_requirements(project,work_item);
+
+            var uncovered_requirements = _.difference(requested_requirements,covered_requirements);
+            return uncovered_requirements;
+
         }
-        function extract_extra_covered_requirements(project,work_item) {
+        function extract_extraneous_requirements(project,work_item) {
             // extract the requirements that  have been covered for work_item but are not explicitly specified
+            var requested_requirements = extract_requested_requirements(project,work_item);
+            var covered_requirements = extract_covered_requirements(project,work_item);
+            console.log("work_item ",work_item.type,work_item.subject);
+            console.log("requested_requirements=", requested_requirements.map(subject).sort());
+            console.log("covered_requirements=",covered_requirements.map(subject).sort());
+            var xtra_requirements = _.difference(covered_requirements,requested_requirements);
+            return xtra_requirements;
         }
 
         function subject(e) { return e.subject; }
@@ -204,8 +196,20 @@ var and = it;
 
 
             console.log(covered_requirements1.map(subject).sort());
-            covered_requirements1.map(subject).sort().should.eql(['RQ3',"RQ4","RQ5"]);
+            covered_requirements1.map(subject).sort().should.eql(['RQ3',"RQ4","RQ5","RQ6"]);
         });
+
+        it("should extract the list of uncovered requirements", function() {
+            var use_case1 = project.query_work_items({ subject: "UC1"})[0];
+            var uncovered_requirement = extract_uncovered_requirements(project,use_case1);
+            uncovered_requirement.map(subject).sort().should.eql(['RQ1','RQ2']);
+        });
+        it("should extract the list of extraneous requirements", function() {
+            var use_case3 = project.query_work_items({ subject: "UC3"})[0];
+            var xtra_requirement = extract_extraneous_requirements(project,use_case3);
+            xtra_requirement.map(subject).sort().should.eql(['RQ6']);
+        });
+
     });
 
 })();
