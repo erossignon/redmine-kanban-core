@@ -48,6 +48,22 @@
 
           })
       });
+
+      it("should find workitem by special query",function() {
+
+          var project1 = new Project();
+          project1.query_work_items({ id: 10}).length.should.eql(0);
+
+          project1.add_work_item(new WorkItem({id: 10, subject: "Hello World"}));
+
+          project1.query_work_items({ id: 10}).length.should.eql(1);
+
+          project1.query_work_items({ subject: "Hello World" }).length.should.eql(1);
+
+          project1.query_work_items({ subject: "Hello World", id: 11 }).length.should.eql(0);
+
+      });
+
   });
 
 })();

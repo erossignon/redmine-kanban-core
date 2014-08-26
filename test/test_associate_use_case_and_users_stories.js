@@ -36,5 +36,16 @@ var rck = require("../") ;
 
         });
 
+        it("associating use_case several time shall not cause damages",function(){
+
+            var use_case_ref1 = project.associate_use_case_and_user_stories()[0];
+            var use_case_before = use_case_ref1.children.length;
+
+            var use_case_ref2 = project.associate_use_case_and_user_stories()[0];
+            var use_case_after = use_case_ref2.children.length;
+
+            use_case_before.should.equal(use_case_after);
+        });
+
     });
 })();
