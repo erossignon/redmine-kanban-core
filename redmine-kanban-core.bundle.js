@@ -9374,7 +9374,7 @@ function howMuchToRead(n, state) {
   if (state.objectMode)
     return n === 0 ? 0 : 1;
 
-  if (n === null || isNaN(n)) {
+  if (isNaN(n) || n === null) {
     // only flow one buffer at a time
     if (state.flowing && state.buffer.length)
       return state.buffer[0].length;
@@ -9409,7 +9409,6 @@ Readable.prototype.read = function(n) {
   var state = this._readableState;
   state.calledRead = true;
   var nOrig = n;
-  var ret;
 
   if (typeof n !== 'number' || n > 0)
     state.emittedReadable = false;
@@ -9428,28 +9427,9 @@ Readable.prototype.read = function(n) {
 
   // if we've ended, and we're now clear, then finish it up.
   if (n === 0 && state.ended) {
-    ret = null;
-
-    // In cases where the decoder did not receive enough data
-    // to produce a full chunk, then immediately received an
-    // EOF, state.buffer will contain [<Buffer >, <Buffer 00 ...>].
-    // howMuchToRead will see this and coerce the amount to
-    // read to zero (because it's looking at the length of the
-    // first <Buffer > in state.buffer), and we'll end up here.
-    //
-    // This can only happen via state.decoder -- no other venue
-    // exists for pushing a zero-length chunk into state.buffer
-    // and triggering this behavior. In this case, we return our
-    // remaining data and end the stream, if appropriate.
-    if (state.length > 0 && state.decoder) {
-      ret = fromList(n, state);
-      state.length -= ret.length;
-    }
-
     if (state.length === 0)
       endReadable(this);
-
-    return ret;
+    return null;
   }
 
   // All the actual chunk generation logic needs to be
@@ -9503,6 +9483,7 @@ Readable.prototype.read = function(n) {
   if (doRead && !state.reading)
     n = howMuchToRead(nOrig, state);
 
+  var ret;
   if (n > 0)
     ret = fromList(n, state);
   else
@@ -9535,7 +9516,8 @@ function chunkInvalid(state, chunk) {
       'string' !== typeof chunk &&
       chunk !== null &&
       chunk !== undefined &&
-      !state.objectMode) {
+      !state.objectMode &&
+      !er) {
     er = new TypeError('Invalid non-string/buffer chunk');
   }
   return er;
@@ -9966,12 +9948,7 @@ Readable.prototype.wrap = function(stream) {
   stream.on('data', function(chunk) {
     if (state.decoder)
       chunk = state.decoder.write(chunk);
-
-    // don't skip over falsy values in objectMode
-    //if (state.objectMode && util.isNullOrUndefined(chunk))
-    if (state.objectMode && (chunk === null || chunk === undefined))
-      return;
-    else if (!state.objectMode && (!chunk || !chunk.length))
+    if (!chunk || !state.objectMode && !chunk.length)
       return;
 
     var ret = self.push(chunk);
@@ -10368,6 +10345,7 @@ Writable.WritableState = WritableState;
 var util = require('core-util-is');
 util.inherits = require('inherits');
 /*</replacement>*/
+
 
 var Stream = require('stream');
 
@@ -11188,7 +11166,11 @@ exports.build_time_line = require("./lib/timeline").build_time_line;
 exports.statistics   = require("./lib/kanbanstatistics").statistics;
 exports.Today        = require("./lib/today").Today;
 exports.WorkItem     = require("./lib/workitem").WorkItem;
+
 exports.Project      = require("./lib/project").Project;
+require("./lib/associate_use_case_and_user_stories");
+require("./lib/associate_requirements");
+
 exports.get_projet_names = require("./lib/workitem_utils").get_projet_names;
 exports.get_start_date = require("./lib/workitem_utils").get_start_date;
 exports.get_last_updated_date = require("./lib/workitem_utils").get_last_updated_date;
@@ -11203,7 +11185,53 @@ exports.statistics = require("./lib/kanbanstatistics").statistics;
 exports.dump_user_story = require("./lib/dump_workitems").dump_user_story;
 
 
-},{"./lib/dump_workitems":42,"./lib/import/redmine_importer":44,"./lib/kanban_kpi/throughput_progression":47,"./lib/kanbanstatistics":50,"./lib/project":51,"./lib/timeline":52,"./lib/today":53,"./lib/utils":54,"./lib/workitem":55,"./lib/workitem_utils":56}],41:[function(require,module,exports){
+},{"./lib/associate_requirements":41,"./lib/associate_use_case_and_user_stories":42,"./lib/dump_workitems":43,"./lib/import/redmine_importer":45,"./lib/kanban_kpi/throughput_progression":48,"./lib/kanbanstatistics":51,"./lib/project":52,"./lib/timeline":53,"./lib/today":54,"./lib/utils":55,"./lib/workitem":56,"./lib/workitem_utils":57}],41:[function(require,module,exports){
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+"use strict";
+var HashMap = require("./hashmap").HashMap;
+var WorkItem = require("./workitem").WorkItem;
+var tl = require('./timeline');
+var assert = require("assert");
+
+var Project = require("./project").Project;
+
+
+Project.prototype.associate_requirements = function() {
+
+   var project = this;
+
+   function _associate_requirement(work_item) {
+
+       function _find_work_item(id) { return project.find_work_item(id); }
+
+       function _is_requirement(work_item) { return work_item.type === "RQT";  }
+
+       work_item.requirements = work_item.relations.map(_find_work_item).filter(_is_requirement);
+
+   }
+   project._work_items.forEach(_associate_requirement);
+}
+},{"./hashmap":44,"./project":52,"./timeline":53,"./workitem":56,"assert":2}],42:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -11238,26 +11266,27 @@ var calculate_defects_statistics = require("./kanban_kpi/calculate_workitem_stat
 var calculate_use_case_statistics = require("./kanban_kpi/calculate_workitem_statistics.js").calculate_use_case_statistics;
 var calculate_user_story_statistics = require("./kanban_kpi/calculate_workitem_statistics.js").calculate_user_story_statistics;
 
+
 Project.prototype.associate_use_case_and_user_stories = function() {
 
     var self = this;
 
-    var ticket_map = new HashMap();
+    // clean up children and defects collection
+    function reset_work_item(work_item) {
 
-    // construct ticket map
-    self._work_items.forEach(function(ticket){ ticket_map.set(ticket.id, ticket); });
+        work_item.children = [];
+        work_item.defects = [];
+        work_item.stats = null;
 
-    function add_workitem(workitem) {
-        self.add_work_item(workitem);
-        ticket_map.set(workitem.id,workitem);
     }
+    self._work_items.forEach(reset_work_item);
     /**
      * get the special Use case used as the parent of the unattached user stories
      * @returns {WorkItem}
      */
     function get_floating_use_case() {
 
-        var uc =ticket_map.get("floating-UC");
+        var uc =self.find_work_item("floating-UC");
 
         if (!uc) {
             uc = new WorkItem({
@@ -11267,7 +11296,7 @@ Project.prototype.associate_use_case_and_user_stories = function() {
                 subject:" Use Case for unattached user stories",
                 parent_id: "noparent"
             });
-            add_workitem(uc);
+            self.add_work_item(uc);
         }
         return uc;
     }
@@ -11279,7 +11308,7 @@ Project.prototype.associate_use_case_and_user_stories = function() {
      */
     function get_or_create_use_case_for_user_story(ticket) {
         assert(ticket.type === "U-S");
-        var uc = ticket_map.get(ticket.parent_id);
+        var uc = self.find_work_item(ticket.parent_id);
         if (!uc) {
             uc = get_floating_use_case();
         }
@@ -11288,7 +11317,7 @@ Project.prototype.associate_use_case_and_user_stories = function() {
 
     function get_floating_user_story() {
 
-        var us = ticket_map.get("floating")
+        var us = self.find_work_item("floating")
         if (!us) {
             var floating_use_case = get_floating_use_case();
 
@@ -11301,7 +11330,7 @@ Project.prototype.associate_use_case_and_user_stories = function() {
                 fixed_version: "Bugs"
             });
 
-            add_workitem(us);
+            self.add_work_item(us);
             floating_use_case.children.push(us);
         }
         assert( us instanceof WorkItem);
@@ -11315,7 +11344,7 @@ Project.prototype.associate_use_case_and_user_stories = function() {
         if (p === "noparent") {
 
             ticket.relations.forEach(function (relation_id) {
-                var related_ticket = ticket_map.get(relation_id);
+                var related_ticket = self.find_work_item(relation_id);
                 if (related_ticket.type === "U-S") {
                     ticket.parent_id = relation_id;
                     return us;
@@ -11325,7 +11354,7 @@ Project.prototype.associate_use_case_and_user_stories = function() {
                 }
             });
         }
-        var parent_ticket = ticket_map.get(ticket.parent_id);
+        var parent_ticket = self.find_work_item(ticket.parent_id);
         if (!parent_ticket) {
             parent_ticket = get_floating_user_story();
         }
@@ -11334,16 +11363,16 @@ Project.prototype.associate_use_case_and_user_stories = function() {
     }
 
     function attach_user_story_to_use_case(ticket) {
-        var uc = get_or_create_use_case_for_user_story(ticket);
-        uc.children.push(ticket);
+        var use_case = get_or_create_use_case_for_user_story(ticket);
+        use_case.children.push(ticket);
     }
 
     function attach_defect_to_user_story(ticket) {
-        var us = get_or_create_user_story_for_defect(ticket);
-        us.defects.push(ticket);
+        var user_story = get_or_create_user_story_for_defect(ticket);
+        user_story.defects.push(ticket);
     }
     function attach_use_case_to_use_case(ticket) {
-        var p = ticket_map.get(ticket.parent_id);
+        var p = self.find_work_item(ticket.parent_id);
         if (p) {
             p.children.push(ticket);
         }
@@ -11368,7 +11397,7 @@ Project.prototype.associate_use_case_and_user_stories = function() {
     return self.top_level_use_cases;
 };
 
-},{"./hashmap":43,"./kanban_kpi/calculate_workitem_statistics.js":45,"./project":51,"./timeline":52,"./workitem":55,"assert":2}],42:[function(require,module,exports){
+},{"./hashmap":44,"./kanban_kpi/calculate_workitem_statistics.js":46,"./project":52,"./timeline":53,"./workitem":56,"assert":2}],43:[function(require,module,exports){
 var assert=require("assert");
 var tl = require('./timeline');
 
@@ -11436,7 +11465,7 @@ function dump_use_cases(project,startDate,endDate,today) {
 }
 exports.dump_use_cases= dump_use_cases;
 exports.dump_user_story= dump_user_story;
-},{"./associate_use_case_and_user_stories":41,"./project":51,"./timeline":52,"./utils":54,"assert":2}],43:[function(require,module,exports){
+},{"./associate_use_case_and_user_stories":42,"./project":52,"./timeline":53,"./utils":55,"assert":2}],44:[function(require,module,exports){
 
 // module.exports =  require("harmony-collections");
 
@@ -11493,7 +11522,7 @@ HashMap.prototype.forEach = function(func) {
 exports.HashMap = HashMap;
 
 
-},{}],44:[function(require,module,exports){
+},{}],45:[function(require,module,exports){
 /**
  *
  * @constructor
@@ -11508,7 +11537,7 @@ RedmineImporter.prototype.foo = function()
 
 exports.RedmineImporter = RedmineImporter;
 
-},{}],45:[function(require,module,exports){
+},{}],46:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -11635,7 +11664,7 @@ exports.calculate_defects_statistics = calculate_defects_statistics;
 exports.calculate_user_story_statistics = calculate_user_story_statistics;
 
 
-},{"../workitem":55,"assert":2}],46:[function(require,module,exports){
+},{"../workitem":56,"assert":2}],47:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -11773,7 +11802,7 @@ function lead_time_KPI(tickets, endDate) {
   return  Math.round(lead_time.average * 100) / 100;
 }
 exports.lead_time_KPI = lead_time_KPI;
-},{"underscore":59}],47:[function(require,module,exports){
+},{"underscore":61}],48:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -11850,7 +11879,7 @@ function throughput_progression(tickets, timeline, width) {
 }
 
 exports.throughput_progression = throughput_progression;
-},{"../hashmap":43,"./work_in_progress":49,"assert":2,"underscore":59}],48:[function(require,module,exports){
+},{"../hashmap":44,"./work_in_progress":50,"assert":2,"underscore":61}],49:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -11921,7 +11950,7 @@ function velocity_KPI(tickets, endDate) {
   return retValue;
 }
 exports.velocity_KPI = velocity_KPI;
-},{"../timeline":52,"./throughput_progression":47,"assert":2,"underscore":59}],49:[function(require,module,exports){
+},{"../timeline":53,"./throughput_progression":48,"assert":2,"underscore":61}],50:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -11983,7 +12012,7 @@ function calculate_wip(tickets, date) {
 }
 exports.calculate_wip = calculate_wip;
 
-},{"assert":2,"underscore":59}],50:[function(require,module,exports){
+},{"assert":2,"underscore":61}],51:[function(require,module,exports){
 /*global require*/
 // The MIT License (MIT)
 //
@@ -12392,7 +12421,7 @@ exports.average_wip_progression = average_wip_progression;
 
 
 
-},{"./kanban_kpi/lead_time":46,"./kanban_kpi/throughput_progression":47,"./kanban_kpi/velocity":48,"./kanban_kpi/work_in_progress":49,"./timeline":52,"./today":53,"./workitem":55,"assert":2,"underscore":59}],51:[function(require,module,exports){
+},{"./kanban_kpi/lead_time":47,"./kanban_kpi/throughput_progression":48,"./kanban_kpi/velocity":49,"./kanban_kpi/work_in_progress":50,"./timeline":53,"./today":54,"./workitem":56,"assert":2,"underscore":61}],52:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -12439,8 +12468,14 @@ function Project(options) {
 };
 
 Project.prototype.add_work_item = function (work_item) {
+    assert(work_item && work_item.id);
     this._work_items.push(work_item);
     this._index[work_item.id] = work_item;
+};
+
+Project.prototype.add_work_items = function(work_item_array) {
+    var self = this;
+    work_item_array.forEach(function(work_item){ self.add_work_item(work_item);});
 };
 
 Project.prototype.find_work_item = function (id) {
@@ -12552,9 +12587,37 @@ Project.prototype.__defineGetter__("lastUpdatedDate",function(){
     return get_last_updated_date(self._work_items);
 });
 
+Project.prototype.__defineGetter__("requirements",function(){
+    var self = this;
+    return self._work_items.filter(function(wi){ return wi.type === "RQT"; });
+});
+
 exports.Project = Project;
 
-},{"./hashmap":43,"./workitem":55,"./workitem_utils":56,"assert":2,"fs":1,"serialijse":57,"underscore":59}],52:[function(require,module,exports){
+function  _match_query(query,work_item) {
+    for(var key in query) {
+        if (query.hasOwnProperty(key)) {
+            if (work_item[key] != query[key]) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * Query a collection of work  items that matches the request.
+ * @method query_work_items
+ * @param query  {Object} and object with the property to match
+ *
+ * @returns {Array<WorkItem>}
+ */
+Project.prototype.query_work_items = function (query) {
+    var self = this;
+    return self._work_items.filter(function(wi){ return _match_query(query,wi); });
+}
+
+},{"./hashmap":44,"./workitem":56,"./workitem_utils":57,"assert":2,"fs":1,"serialijse":58,"underscore":61}],53:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -13018,7 +13081,7 @@ exports.calculateNumberOfNonBusinessDays = calculateNumberOfNonBusinessDays
 exports.diffDate         = diffDate;
 exports.build_time_line  = build_time_line;   
 
-},{"./today":53,"assert":2}],53:[function(require,module,exports){
+},{"./today":54,"assert":2}],54:[function(require,module,exports){
 /**
  * @method  Today
  * mockable method returning Today's date
@@ -13035,7 +13098,7 @@ Today.set = function(date) {
 }
 exports.Today = Today;
 
-},{}],54:[function(require,module,exports){
+},{}],55:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -13080,7 +13143,7 @@ function dateToYMD(date) {
 
 exports.ellipsys = ellipsys;
 exports.dateToYMD = dateToYMD;
-},{}],55:[function(require,module,exports){
+},{}],56:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -13117,6 +13180,12 @@ var HashMap = require("./hashmap").HashMap;
 var tl = require('./timeline');
 var Today = require("./today").Today;
 
+
+var valid_workitem_types = ["U-S","U-C","BUG","EVO","QA","RQT"];
+
+function is_valid_workitem_type(workitem_type) {
+    return valid_workitem_types.indexOf(workitem_type) >=0;
+}
 /**
  * @class WorkItem
  * @param options
@@ -13128,6 +13197,7 @@ var Today = require("./today").Today;
  * @param options.priority      {Integer} - the work item priority - higher number means higher priority.
  * @param options.complexity    {String}  - the work item complexity.
  * @param options.projet        {String}  - the name of the project the work item has been assigned to.
+ * @param options.parent_id     {Integer} - the id of the parent work_item in a hierarchy of work item.
  * @constructor
  */
 function WorkItem(options) {
@@ -13155,7 +13225,7 @@ function WorkItem(options) {
             "parent_id":"",
             "done_ratio":"",
             "subject": "\w",
-            "type": "(U-S|U-C|BUG|EVO|QA)",
+            "type": valid_workitem_types.join(""),
             "created_on": "DATE",
             "updated_on": "DATE",
             "fixed_version": "IDENT",
@@ -13174,6 +13244,8 @@ function WorkItem(options) {
             me[field] = options[field];
         });
     }
+
+    assert(is_valid_workitem_type(this.type));
 
     this.created_on = options.created_on ? new Date(options.created_on) : Today();
 
@@ -13200,6 +13272,8 @@ WorkItem.prototype.__defineGetter__("user_stories",function() {
 WorkItem.prototype.__defineGetter__("use_cases",function() {
     return this.children.filter(function(workitem){ return workitem.type === "U-C"; });
 });
+
+
 
 //WorkItem.createFromJSON = function(jsonObj) {
 //
@@ -13541,7 +13615,7 @@ WorkItem.prototype.sort_defects = function () {
 exports.WorkItem = WorkItem;
 
 
-},{"./hashmap":43,"./timeline":52,"./today":53,"assert":2}],56:[function(require,module,exports){
+},{"./hashmap":44,"./timeline":53,"./today":54,"assert":2}],57:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -13612,7 +13686,7 @@ exports.get_start_date = get_start_date;
 exports.get_projet_names = get_projet_names;
 exports.get_last_updated_date = get_last_updated_date;
 
-},{"assert":2}],57:[function(require,module,exports){
+},{"assert":2}],58:[function(require,module,exports){
 /*global exports,require*/
 var lib = require("./lib/serialijse");
 exports.serialize = lib.serialize;
@@ -13621,8 +13695,8 @@ exports.serializeZ = lib.serializeZ;
 exports.deserializeZ = lib.deserializeZ;
 exports.declarePersistable = lib.declarePersistable;
 
-},{"./lib/serialijse":58}],58:[function(require,module,exports){
-/*global exports*/
+},{"./lib/serialijse":59}],59:[function(require,module,exports){
+/*global module*/
 (function () {
     "use strict";
     var assert = require("assert"),
@@ -13633,9 +13707,9 @@ exports.declarePersistable = lib.declarePersistable;
     function declarePersistable(constructor) {
         var className = constructor.prototype.constructor.name;
         if (g_global.hasOwnProperty(className)) {
-            throw new Error(" class " + className + " already registered");
+            console.warn("warning: declarePersistable : class " + className + " already registered");
         }
-        assert(!g_global.hasOwnProperty(className));
+        //xx assert(!g_global.hasOwnProperty(className));
         g_global[className] = constructor;
     }
 
@@ -13676,21 +13750,16 @@ exports.declarePersistable = lib.declarePersistable;
             // a => array
             // o => class  { c: className d: data }
             // @ => already serialized object
-            if (className === "Object") {
-                // default JSON object
-                serializingObject["j"] = object;
-                return;
-            }
+
             if (className === "Array") {
                 serializingObject["a"] = object.map(_serialize);
                 return;
             }
             if (className === "Date") {
-                serializingObject["d"] = object.toUTCString();
+                serializingObject["d"] = object.getTime();
                 return;
             }
-
-            if (!g_global.hasOwnProperty(className)) {
+            if (className !== "Object" && !g_global.hasOwnProperty(className) ) {
                 throw new Error("class " + className + " is not registered in class Factory - deserialization will not be possible");
             }
 
@@ -13774,7 +13843,7 @@ exports.declarePersistable = lib.declarePersistable;
 
         function deserialize_node(node) {
             // special treatment
-            if (!node) return null;
+            if (!node) { return null;}
 
             if (node.hasOwnProperty("d")) {
                 return new Date(node.d);
@@ -13802,7 +13871,7 @@ exports.declarePersistable = lib.declarePersistable;
 
         function _deserialize_object(object_definition, object_id) {
 
-            var constructor, obj, data, v, value, className;
+            var constructor, obj, data, v, className;
 
             assert(object_definition.c);
             assert(object_definition.d);
@@ -13810,14 +13879,17 @@ exports.declarePersistable = lib.declarePersistable;
             className = object_definition.c;
             data = object_definition.d;
 
-            constructor = g_global[className];
-            if (!constructor) {
-                throw new Error(" Cannot find constructor to deserialize class of type" + className + ". use declarePersistable(Constructor)");
+            if (className === "Object") {
+                obj = {};
+            } else {
+                constructor = g_global[className];
+                if (!constructor) {
+                    throw new Error(" Cannot find constructor to deserialize class of type" + className + ". use declarePersistable(Constructor)");
 
+                }
+                assert(_.isFunction(constructor));
+                obj = new constructor();
             }
-            assert(_.isFunction(constructor));
-
-            obj = new constructor();
 
             cache[object_id] = obj;
             for (v in data) {
@@ -13846,7 +13918,8 @@ exports.declarePersistable = lib.declarePersistable;
             callback(null, buff);
         });
 
-    }
+    };
+
     module.exports.deserializeZ = function (data, callback) {
 
         var zlib = require("zlib");
@@ -13857,12 +13930,13 @@ exports.declarePersistable = lib.declarePersistable;
             callback(null, deserialize(buff.toString()));
         });
 
-    }
+    };
+
 
 }());
 
 
-},{"assert":2,"underscore":59,"zlib":17}],59:[function(require,module,exports){
+},{"assert":2,"underscore":60,"zlib":17}],60:[function(require,module,exports){
 //     Underscore.js 1.6.0
 //     http://underscorejs.org
 //     (c) 2009-2014 Jeremy Ashkenas, DocumentCloud and Investigative Reporters & Editors
@@ -15207,4 +15281,6 @@ exports.declarePersistable = lib.declarePersistable;
   }
 }).call(this);
 
+},{}],61:[function(require,module,exports){
+module.exports=require(60)
 },{}]},{},[40]);

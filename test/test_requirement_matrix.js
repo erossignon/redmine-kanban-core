@@ -65,7 +65,11 @@ var and = it;
         function _to_workitem_array(m) {
            return Object.keys(m).map(function(e)  { return m[e]; });
         }
+
+
         function extract_requested_requirements(project,work_item) {
+
+            assert(work_item.type === "U-S"  || work_item.type === "U-C" );
             // extract the the requested requirement of a workitem
             // i.e the requirements that are attached to the parent of this work_item up to the root
 
@@ -83,8 +87,8 @@ var and = it;
             return _to_workitem_array(m);
         }
 
-
         function find_descendance(work_item) {
+            assert(work_item.type === "U-S"  || work_item.type === "U-C" );
 
             var queue = [];
             function _recursive_queue_children(work_item) {
@@ -103,8 +107,9 @@ var and = it;
             return tmp.filter(is_user_stories);
         }
 
-        function extract_covered_requirements(project,work_item) {
+        function extract_covered_requirements(work_item) {
 
+            assert(work_item instanceof rck.WorkItem);
             // if work_item is a user_stories
             //   - extract the the requirement that have been attached to the user_stories
             //   - explorer also children user_stories
@@ -127,7 +132,7 @@ var and = it;
             // extract the requirements that should have been covered for work_item but are not covered
 
             var requested_requirements = extract_requested_requirements(project,work_item);
-            var covered_requirements = extract_covered_requirements(project,work_item);
+            var covered_requirements = extract_covered_requirements(work_item);
 
             var uncovered_requirements = _.difference(requested_requirements,covered_requirements);
             return uncovered_requirements;
@@ -136,7 +141,7 @@ var and = it;
         function extract_extraneous_requirements(project,work_item) {
             // extract the requirements that  have been covered for work_item but are not explicitly specified
             var requested_requirements = extract_requested_requirements(project,work_item);
-            var covered_requirements = extract_covered_requirements(project,work_item);
+            var covered_requirements = extract_covered_requirements(work_item);
             console.log("work_item ",work_item.type,work_item.subject);
             console.log("requested_requirements=", requested_requirements.map(subject).sort());
             console.log("covered_requirements=",covered_requirements.map(subject).sort());
@@ -176,7 +181,7 @@ var and = it;
             var use_case2 = project.query_work_items({ subject: "UC2"})[0];
             use_case2.type.should.eql("U-C");
 
-            var covered_requirements = extract_covered_requirements(project, use_case2);
+            var covered_requirements = extract_covered_requirements( use_case2);
 
             console.log(covered_requirements.map(subject).sort());
 
@@ -192,7 +197,7 @@ var and = it;
             var check_us = find_all_dependant_user_stories(use_case1);
             check_us.map(subject).sort().should.eql(["US1","US2","US3"]);
 
-            var covered_requirements1 = extract_covered_requirements(project,use_case1);
+            var covered_requirements1 = extract_covered_requirements(use_case1);
 
 
             console.log(covered_requirements1.map(subject).sort());
@@ -204,10 +209,95 @@ var and = it;
             var uncovered_requirement = extract_uncovered_requirements(project,use_case1);
             uncovered_requirement.map(subject).sort().should.eql(['RQ1','RQ2']);
         });
+
         it("should extract the list of extraneous requirements", function() {
             var use_case3 = project.query_work_items({ subject: "UC3"})[0];
             var xtra_requirement = extract_extraneous_requirements(project,use_case3);
             xtra_requirement.map(subject).sort().should.eql(['RQ6']);
+        });
+
+        it("should find all the UseCase that are linked to a requirement", function() {
+
+            var requirement4 = project.query_work_items({ subject: "RQ4"})[0];
+
+            requirement4.nominal_use_cases.map(subject).sort().should.eql(['UC2','UC3']);
+            requirement4.implementing_user_stories.map(subject).sort().should.eql(["US2"]);
+        });
+
+        it("should produce a matrix",function(){
+
+            project.associate_use_case_and_user_stories();
+            project.associate_requirements();
+
+            var f= {
+
+                start_row: function()  {
+                    this.ele = [];
+                },
+                end_row: function() {
+                    console.log(this.ele.join("   "));
+                },
+                add_cell: function(text) {
+                    this.ele.push(text);
+                }
+            };
+            f.start_row();
+            f.add_cell("Rqt #");
+            f.add_cell("Rqt Subject");
+            f.end_row();
+
+            function dump_requirement(requirement) {
+                f.start_row();
+                f.add_cell(requirement.id);
+                f.add_cell(requirement.subject);
+
+                var m = {};
+
+                console.log(requirement.implementing_user_stories.map(subject).join("-"));
+
+                requirement.nominal_use_cases.forEach(function(uc) {
+                    f.add_cell(uc.id);
+                    f.add_cell(uc.subject);
+
+                    // extract all users stories for this UC
+                    var user_stories = find_all_dependant_user_stories(uc);
+
+                    function filter_user_story_that_implements_requirement(requirement) {
+
+                        return function _filter_user_story_that_implements_requirement(user_story) {
+                            var rqts = extract_covered_requirements(user_story);
+                            return rqts.indexOf(requirement) >=0;
+                        };
+                    }
+                    var user_stories = user_stories.filter(filter_user_story_that_implements_requirement(requirement));
+
+                    // the user stories that implement the requirements  and that are done
+                    var done_user_story   =  user_stories.filter(function(work_item){ return work_item.is_done();});
+
+                    // the user stories that implement the requirements  and that are not done
+                    var incomplete_user_story =  user_stories.filter(function(work_item){ return !work_item.is_done();});
+                    m[uc.id] = {
+                        done_user_story: done_user_story,
+                        incomplete_user_story: incomplete_user_story
+                    };
+
+                    f.add_cell("D:"+done_user_story.map(subject).join("|"));
+
+                    f.add_cell("U:"+incomplete_user_story.map(subject).join("|"));
+                });
+                f.end_row();
+                f.add_cell("   ");
+                f.add_cell("   ");
+                f.start_row();
+                requirement.nominal_use_cases.forEach(function(uc) {
+
+                });
+                f.end_row();
+
+
+            }
+            project.requirements.forEach(dump_requirement);
+
         });
 
     });

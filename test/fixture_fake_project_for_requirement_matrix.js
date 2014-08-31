@@ -21,9 +21,7 @@ function make_requirement(subject) {
 function make_work_item(type,subject,parent, linked_items) {
     var parent_id = parent ? parent.id : null;
 
-    var relation_ids = linked_items.map(function (e) {
-        return e.id;
-    });
+    var relation_ids = linked_items.map(function (e) {return e.id; });
 
     var work_item = new WorkItem({
         id: _get_next_id(),
@@ -33,6 +31,7 @@ function make_work_item(type,subject,parent, linked_items) {
         relations: relation_ids
     });
 
+    linked_items.forEach(function(item){ item.relations.push(work_item.id); });
     return work_item;
 
 }
@@ -79,7 +78,7 @@ exports.project= (function make_project() {
 
     project.add_work_items([rq1,rq2,rq3,rq4,rq5,rq6]);
 
-    var uc1 = make_use_case("UC1",null,[    rq1,rq2]);
+    var uc1 = make_use_case("UC1",null,[rq1,rq2]);
     var uc2 = make_use_case("UC2",uc1 ,[rq3,rq4]);
     var uc3 = make_use_case("UC3",uc1 ,[rq4,rq5]);
     project.add_work_items([uc1,uc2,uc3]);
