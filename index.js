@@ -9,6 +9,7 @@ exports.WorkItem     = require("./lib/workitem").WorkItem;
 exports.Project      = require("./lib/project").Project;
 require("./lib/associate_use_case_and_user_stories");
 require("./lib/associate_requirements");
+require("./lib/requirement_matrix");
 
 exports.get_projet_names = require("./lib/workitem_utils").get_projet_names;
 exports.get_start_date = require("./lib/workitem_utils").get_start_date;

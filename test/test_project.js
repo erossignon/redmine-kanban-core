@@ -65,5 +65,23 @@
       });
 
   });
+  describe("test project serialization", function() {
+     it(" shoud serialize and deserialize a projet ", function(done){
 
+         var project = require("./fixture_fake_project_2").project2;
+
+         var tmp_filename = '/tmp/project.json';
+
+         project.save(tmp_filename,function(err){
+
+             var reloaded_project = new Project();
+             reloaded_project.nb_work_items.should.eql(0);
+             reloaded_project.load(tmp_filename,function(err){
+                 reloaded_project.nb_work_items.should.eql(project.nb_work_items);
+                 done(err);
+             });
+
+         });
+     });
+  });
 })();

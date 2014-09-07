@@ -88,6 +88,8 @@ exports.project= (function make_project() {
     var us3 = make_user_story("US3",uc3,[rq5,rq6]);
     project.add_work_items([us1,us2,us3]);
 
+    us1.set_status(Date.now(),"Done");
+    us3.set_status(Date.now(),"Done");
     return project;
 
 })();

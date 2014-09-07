@@ -24,8 +24,8 @@ var rck = require("../") ;
 
             var use_cases = project.associate_use_case_and_user_stories();
 
-            console.log(use_cases.length);
-            console.log(require("util").inspect(use_cases,{colors: true, depth: 10}));
+            //xx console.log(use_cases.length);
+            //xx console.log(require("util").inspect(use_cases,{colors: true, depth: 10}));
 
             use_cases.length.should.eql(2); // 2 epics
 
