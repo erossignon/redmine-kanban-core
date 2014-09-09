@@ -6,3 +6,6 @@ toto*
 test/temp
 ___.git
 *_old___
+tmp.csv
+.~lock*
+bower_components

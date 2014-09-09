@@ -11170,6 +11170,7 @@ exports.WorkItem     = require("./lib/workitem").WorkItem;
 exports.Project      = require("./lib/project").Project;
 require("./lib/associate_use_case_and_user_stories");
 require("./lib/associate_requirements");
+require("./lib/requirement_matrix");
 
 exports.get_projet_names = require("./lib/workitem_utils").get_projet_names;
 exports.get_start_date = require("./lib/workitem_utils").get_start_date;
@@ -11185,7 +11186,9 @@ exports.statistics = require("./lib/kanbanstatistics").statistics;
 exports.dump_user_story = require("./lib/dump_workitems").dump_user_story;
 
 
-},{"./lib/associate_requirements":41,"./lib/associate_use_case_and_user_stories":42,"./lib/dump_workitems":43,"./lib/import/redmine_importer":45,"./lib/kanban_kpi/throughput_progression":48,"./lib/kanbanstatistics":51,"./lib/project":52,"./lib/timeline":53,"./lib/today":54,"./lib/utils":55,"./lib/workitem":56,"./lib/workitem_utils":57}],41:[function(require,module,exports){
+},{"./lib/associate_requirements":41,"./lib/associate_use_case_and_user_stories":42,"./lib/dump_workitems":43,"./lib/import/redmine_importer":45,"./lib/kanban_kpi/throughput_progression":48,"./lib/kanbanstatistics":51,"./lib/project":52,"./lib/requirement_matrix":53,"./lib/timeline":54,"./lib/today":55,"./lib/utils":56,"./lib/workitem":57,"./lib/workitem_utils":58}],41:[function(require,module,exports){
+/*jslint node: true */
+"use strict";
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -11207,31 +11210,241 @@ exports.dump_user_story = require("./lib/dump_workitems").dump_user_story;
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
-"use strict";
 var HashMap = require("./hashmap").HashMap;
 var WorkItem = require("./workitem").WorkItem;
 var tl = require('./timeline');
 var assert = require("assert");
+var _ = require("underscore");
 
 var Project = require("./project").Project;
 
-
-Project.prototype.associate_requirements = function() {
-
-   var project = this;
-
-   function _associate_requirement(work_item) {
-
-       function _find_work_item(id) { return project.find_work_item(id); }
-
-       function _is_requirement(work_item) { return work_item.type === "RQT";  }
-
-       work_item.requirements = work_item.relations.map(_find_work_item).filter(_is_requirement);
-
-   }
-   project._work_items.forEach(_associate_requirement);
+function _is_requirement(work_item) {
+    return work_item.type === "RQT";
 }
-},{"./hashmap":44,"./project":52,"./timeline":53,"./workitem":56,"assert":2}],42:[function(require,module,exports){
+
+function _is_use_case(work_item) {
+    return work_item.type === "U-C";
+}
+
+function _is_user_story(work_item) {
+    return work_item.type === "U-S";
+}
+
+Project.prototype.associate_requirements = function () {
+
+    var project = this;
+
+    function _find_work_item(id) {
+        return project.find_work_item(id);
+    }
+
+    function _associate_requirement(work_item) {
+
+        work_item.requirements = work_item.relations.map(_find_work_item).filter(_is_requirement);
+    }
+    function associate_requirement_with_use_case_and_user_story(requirement) {
+
+        var use_cases = requirement.relations.map(_find_work_item).filter(_is_use_case);
+
+        var user_stories = requirement.relations.map(_find_work_item).filter(_is_user_story);
+
+        requirement.nominal_use_cases = use_cases;
+        requirement.implementing_user_stories = user_stories;
+    }
+
+    project._work_items.forEach(_associate_requirement);
+
+    // now associate Use-case with requirements
+    project.requirements.forEach(associate_requirement_with_use_case_and_user_story);
+
+};
+
+function _get_parent(project,work_item) {
+    return project.find_work_item(work_item.parent_id);
+}
+
+function _populate_requirements_map(m,work_item) {
+    function push_to_map(e) { m[e.id] =e;}
+    work_item.requirements.forEach(push_to_map);
+}
+
+function _to_workitem_array(m) {
+    return Object.keys(m).map(function(e)  { return m[e]; });
+}
+
+function _extract_requested_requirements(project,work_item) {
+
+    assert(work_item.type === "U-S"  || work_item.type === "U-C" );
+    // extract the the requested requirement of a workitem
+    // i.e the requirements that are attached to the parent of this work_item up to the root
+
+    while (work_item && work_item.type === "U-S") {
+        // for a user story we start at the first parent use case
+        work_item = _get_parent(project,work_item);
+    }
+    assert(work_item && work_item.type === "U-C");
+    var m = {};
+
+    while (work_item) {
+        _populate_requirements_map(m,work_item);
+        work_item = _get_parent(project,work_item);
+    }
+    return _to_workitem_array(m);
+}
+
+function find_descendance(work_item) {
+    assert(work_item.type === "U-S"  || work_item.type === "U-C" );
+
+    var queue = [];
+    function _recursive_queue_children(work_item) {
+        work_item.children.forEach(function (child) {
+            queue.push(child);
+            _recursive_queue_children(child);
+        });
+    }
+    _recursive_queue_children(work_item);
+    return queue;
+}
+
+function _find_all_dependant_user_stories(work_item) {
+    var tmp =  find_descendance(work_item);
+    return tmp.filter(_is_user_story);
+}
+
+function _extract_covered_requirements(work_item) {
+
+    assert(work_item instanceof WorkItem);
+    assert(work_item.type === "U-S"  || work_item.type === "U-C" );
+
+    // if work_item is a user_stories
+    //   - extract the the requirement that have been attached to the user_stories
+    //   - explorer also children user_stories
+    // i.e the requirements that are attached to the user-stories of this work_item down to the bottom
+
+    var user_stories = _find_all_dependant_user_stories(work_item);
+    if (work_item.type === "U-S") {
+        user_stories.push(work_item);
+    }
+
+    var m = {};
+    user_stories.forEach(function(us){ _populate_requirements_map(m,us); });
+
+    return _to_workitem_array(m);
+
+}
+
+function _extract_uncovered_requirements(project,work_item) {
+    // extract the requirements that should have been covered for work_item but are not covered
+
+    var requested_requirements = _extract_requested_requirements(project,work_item);
+    var covered_requirements = _extract_covered_requirements(work_item);
+
+    var uncovered_requirements = _.difference(requested_requirements,covered_requirements);
+    return uncovered_requirements;
+
+}
+
+function subject(e) { return e.subject; }
+
+function _extract_extraneous_requirements(project,work_item) {
+    // extract the requirements that  have been covered for work_item but are not explicitly specified
+    var requested_requirements = _extract_requested_requirements(project,work_item);
+    var covered_requirements = _extract_covered_requirements(work_item);
+    console.log("work_item ",work_item.type,work_item.subject);
+    console.log("requested_requirements=", requested_requirements.map(subject).sort());
+    console.log("covered_requirements=",covered_requirements.map(subject).sort());
+    var xtra_requirements = _.difference(covered_requirements,requested_requirements);
+    return xtra_requirements;
+}
+
+/**
+ *
+ * @method extract_requested_requirements
+ * @param  work_item {WorkItem}  a work item to analyse
+ * @return a list of **requirements** that the work_item must implement
+ * @precondition: WorkItem is a use case or user story.
+ */
+Project.prototype.extract_requested_requirements = function(work_item) {
+    return _extract_requested_requirements(this,work_item);
+};
+
+/**
+ *
+ * @method extract_covered_requirements
+ * @param  work_item {WorkItem}  a work item to analyse
+ * @return a list of **requirements** that the work_item is currently  implementing
+ *
+ * @precondition: WorkItem is a use case or user story.
+ */
+Project.prototype.extract_covered_requirements = function(work_item) {
+    return _extract_covered_requirements(work_item);
+};
+
+/**
+ *
+ * @method extract_uncovered_requirements
+ * @param  work_item {WorkItem}  a work item to analyse
+ * @return a list of **requirements** that the work_item is not implementing yet
+ *
+ * @precondition: work_item is a use case.
+ */
+Project.prototype.extract_uncovered_requirements = function(work_item) {
+    return _extract_uncovered_requirements(this,work_item);
+};
+
+/**
+ *
+ * @method extract_extraneous_requirements
+ * @param  work_item {WorkItem}  a work item to analyse
+ * @return a list of **requirements** that the work_item is implementing but which are
+ *         not in the list of requested requirements.
+ */
+Project.prototype.extract_extraneous_requirements = function(work_item) {
+    return _extract_extraneous_requirements(this,work_item);
+};
+
+/**
+ * find all users stories that are related to this "use case" work_item.
+ * @method find_all_dependant_user_stories
+ *
+ * @param work_item {WorkItem}
+ * @returns {Array<WorkItem>}
+ *
+ * @precondition: work_item is a use case.
+ */
+Project.prototype.find_all_dependant_user_stories = function(work_item) {
+    return _find_all_dependant_user_stories(work_item);
+};
+
+/**
+ * find a list of user stories from a use_case, that implements a given requirement
+ * @method  user_story_that_implements_requirement
+ *
+ * @param use_case
+ * @param requirement
+ * @return {Array<Workitem>} a list of user stories
+ */
+Project.prototype.user_story_that_implements_requirement = function(use_case, requirement) {
+
+    assert( use_case instanceof WorkItem && use_case.type === "U-C");
+    assert( requirement instanceof WorkItem && requirement.type === "RQT");
+
+    var project =this;
+
+    var user_stories = project.find_all_dependant_user_stories(use_case);
+
+    function filter_user_story_that_implements_requirement(requirement) {
+
+        return function _filter_user_story_that_implements_requirement(user_story) {
+            var rqts = project.extract_covered_requirements(user_story);
+            return rqts.indexOf(requirement) >=0;
+        };
+    }
+    user_stories = user_stories.filter(filter_user_story_that_implements_requirement(requirement));
+
+    return user_stories;
+};
+},{"./hashmap":44,"./project":52,"./timeline":54,"./workitem":57,"assert":2,"underscore":63}],42:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -11273,12 +11486,9 @@ Project.prototype.associate_use_case_and_user_stories = function() {
 
     // clean up children and defects collection
     function reset_work_item(work_item) {
+        work_item.reset();
+    };
 
-        work_item.children = [];
-        work_item.defects = [];
-        work_item.stats = null;
-
-    }
     self._work_items.forEach(reset_work_item);
     /**
      * get the special Use case used as the parent of the unattached user stories
@@ -11363,13 +11573,16 @@ Project.prototype.associate_use_case_and_user_stories = function() {
     }
 
     function attach_user_story_to_use_case(ticket) {
+        assert( ticket.type === "U-S");
         var use_case = get_or_create_use_case_for_user_story(ticket);
+        assert( use_case.type === "U-C");
         use_case.children.push(ticket);
     }
 
     function attach_defect_to_user_story(ticket) {
+        assert( ticket.type === "BUG");
         var user_story = get_or_create_user_story_for_defect(ticket);
-        user_story.defects.push(ticket);
+        user_story.children.push(ticket);
     }
     function attach_use_case_to_use_case(ticket) {
         var p = self.find_work_item(ticket.parent_id);
@@ -11397,7 +11610,29 @@ Project.prototype.associate_use_case_and_user_stories = function() {
     return self.top_level_use_cases;
 };
 
-},{"./hashmap":44,"./kanban_kpi/calculate_workitem_statistics.js":46,"./project":52,"./timeline":53,"./workitem":56,"assert":2}],43:[function(require,module,exports){
+},{"./hashmap":44,"./kanban_kpi/calculate_workitem_statistics.js":46,"./project":52,"./timeline":54,"./workitem":57,"assert":2}],43:[function(require,module,exports){
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
 var assert=require("assert");
 var tl = require('./timeline');
 
@@ -11465,7 +11700,7 @@ function dump_use_cases(project,startDate,endDate,today) {
 }
 exports.dump_use_cases= dump_use_cases;
 exports.dump_user_story= dump_user_story;
-},{"./associate_use_case_and_user_stories":42,"./project":52,"./timeline":53,"./utils":55,"assert":2}],44:[function(require,module,exports){
+},{"./associate_use_case_and_user_stories":42,"./project":52,"./timeline":54,"./utils":56,"assert":2}],44:[function(require,module,exports){
 
 // module.exports =  require("harmony-collections");
 
@@ -11664,7 +11899,7 @@ exports.calculate_defects_statistics = calculate_defects_statistics;
 exports.calculate_user_story_statistics = calculate_user_story_statistics;
 
 
-},{"../workitem":56,"assert":2}],47:[function(require,module,exports){
+},{"../workitem":57,"assert":2}],47:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -11802,7 +12037,7 @@ function lead_time_KPI(tickets, endDate) {
   return  Math.round(lead_time.average * 100) / 100;
 }
 exports.lead_time_KPI = lead_time_KPI;
-},{"underscore":61}],48:[function(require,module,exports){
+},{"underscore":63}],48:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -11879,7 +12114,7 @@ function throughput_progression(tickets, timeline, width) {
 }
 
 exports.throughput_progression = throughput_progression;
-},{"../hashmap":44,"./work_in_progress":50,"assert":2,"underscore":61}],49:[function(require,module,exports){
+},{"../hashmap":44,"./work_in_progress":50,"assert":2,"underscore":63}],49:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -11950,7 +12185,8 @@ function velocity_KPI(tickets, endDate) {
   return retValue;
 }
 exports.velocity_KPI = velocity_KPI;
-},{"../timeline":53,"./throughput_progression":48,"assert":2,"underscore":61}],50:[function(require,module,exports){
+},{"../timeline":54,"./throughput_progression":48,"assert":2,"underscore":63}],50:[function(require,module,exports){
+/*global require ,exports*/
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -12012,7 +12248,7 @@ function calculate_wip(tickets, date) {
 }
 exports.calculate_wip = calculate_wip;
 
-},{"assert":2,"underscore":61}],51:[function(require,module,exports){
+},{"assert":2,"underscore":63}],51:[function(require,module,exports){
 /*global require*/
 // The MIT License (MIT)
 //
@@ -12421,7 +12657,7 @@ exports.average_wip_progression = average_wip_progression;
 
 
 
-},{"./kanban_kpi/lead_time":47,"./kanban_kpi/throughput_progression":48,"./kanban_kpi/velocity":49,"./kanban_kpi/work_in_progress":50,"./timeline":53,"./today":54,"./workitem":56,"assert":2,"underscore":61}],52:[function(require,module,exports){
+},{"./kanban_kpi/lead_time":47,"./kanban_kpi/throughput_progression":48,"./kanban_kpi/velocity":49,"./kanban_kpi/work_in_progress":50,"./timeline":54,"./today":55,"./workitem":57,"assert":2,"underscore":63}],52:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -12506,16 +12742,22 @@ Project.prototype.loadString = function (dataString, options,callback) {
 
     var self = this;
 
-    self._work_items = deserialize(dataString);
-    assert(_.isArray(self._work_items), " expecting an array here");
+    self._work_items = [];
+    try {
+        self._work_items = deserialize(dataString);
+        assert(_.isArray(self._work_items), " expecting an array here");
 
-    // rebuild index;
-    self._index = {}
-    self._work_items.forEach(function (work_item) {
-        self._index[work_item.id] = work_item;
-    });
+        // rebuild index;
+        self._index = {}
+        self._work_items.forEach(function (work_item) {
+            self._index[work_item.id] = work_item;
+        });
+    }
+    catch(err) {
+        callback(err);
+        return;
+    }
     callback(null);
-
 };
 
 Project.prototype.load = function (filename, callback) {
@@ -12531,7 +12773,10 @@ Project.prototype.load = function (filename, callback) {
             return;
         }
         serializationString = serializationString.toString();
-        self.loadString(serializationString,callback);
+        self.loadString(serializationString,function(err) {
+            if(err) { console.log(" cannot load file ",filename); }
+            callback(err);
+        });
 
     });
 };
@@ -12617,7 +12862,281 @@ Project.prototype.query_work_items = function (query) {
     return self._work_items.filter(function(wi){ return _match_query(query,wi); });
 }
 
-},{"./hashmap":44,"./workitem":56,"./workitem_utils":57,"assert":2,"fs":1,"serialijse":58,"underscore":61}],53:[function(require,module,exports){
+},{"./hashmap":44,"./workitem":57,"./workitem_utils":58,"assert":2,"fs":1,"serialijse":60,"underscore":63}],53:[function(require,module,exports){
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+
+var rck = require("../") ;
+var _ = require("underscore");
+
+var Project = rck.Project;
+
+
+// build a stucture to report on project requirement coverage
+//
+// requirement_coverage : {
+//   coverage:      -  coverage in %
+//   requirements: [  {
+//      requirement: {
+//         id:
+//         subject:
+//
+//         statistics:  {
+//          nb_use_cases:          - number of use cases to which this requirement applies
+//          nb_uncovered_use_cases - number of use case that do not have any user storie attached with this requirement
+//          nb_user_stories:       - total number of user stories that are referencing this requirement
+//          nb_user_stories_done:  - number of user stories that are completed and validated
+//          weight:                - the weight of this requirement ( based on nb_user_stories & nb_uncovered_use_cases)
+//          score:                 - the covering score of this requirement
+//          covered_percent:       - coverage of this requirements       ( = score/weight )
+//        }
+//        implementing_user_stories: [   - array of user stories implementing this requirements
+//          {/* WorkItem */
+//               id:              - use case ID
+//               subject:         - subject
+//               percent_done     - 100% = done : 0% not started, else in  progress
+//          }
+//        ]
+//        nominal_use_cases: [      -  array of use cases that are affected by this requirement and that must have at
+//                                     least one user story implementing this requirement to be valid
+//        ],
+//        use_case_details {
+//            use_case: {/* WorkItem */
+//               id:              - use case ID
+//               subject:         - subject
+//            }
+//            user_stories: [{
+//                ( one or more element already present in implementing_user_stories)
+//            }]
+//         }
+//
+//         uc_us: [
+//            key
+//         }
+//      ]
+//    } ]
+//  }
+
+var consolidated_percent_done = require("./workitem").private.consolidated_percent_done;
+var get_weight = require("./workitem").private.get_weight;
+var colors = require("colors");
+
+
+
+function evaluate_requirement_statistics(requirement,project) {
+
+
+    function evaluate_use_case_details_relative_to_requirement(use_case) {
+
+        var user_stories = project.user_story_that_implements_requirement(use_case,requirement);
+
+        var unplanned = user_stories.filter(function(us){ return us.unplanned; });
+
+        var planned   = user_stories.filter(function(us){ return !us.unplanned; });
+
+        var percent_done =consolidated_percent_done(planned);
+
+        var weight = get_weight(user_stories);
+
+        function _get_use_case_status(p) {
+           if (p === 0 ) {
+                return "RED : 0%".red.bold;
+            } else if (p >= 99.8) {
+                return "GREEN : 100%".green.bold;
+            } else  {
+                return ('ORANGE : ' + p + '%').yellow;
+            }
+        }
+        return {
+            use_case:      use_case,
+            user_stories : user_stories,
+            percent_done : percent_done, // in regard with the given requirement
+            weight:        weight,
+            status: _get_use_case_status(percent_done),
+            nb_unplanned_us: unplanned.length
+        };
+    }
+
+    var use_case_details = requirement.nominal_use_cases.map(evaluate_use_case_details_relative_to_requirement);
+
+    var uncovered_use_cases = use_case_details.filter(function(element) {
+        return element.user_stories.length === 0;
+    });
+
+    var done_user_stories = requirement.implementing_user_stories.filter(function(work_item){
+        return work_item.is_done();
+    });
+
+
+    // get all users stories that are referenced by use_cases
+    var use_case_us = _.union.apply(null,use_case_details.map(_.property("user_stories")));
+
+    // console.log(use_case_us.map(_.property"subject")));
+
+    // extract user stories that are referencing this requirement but that are not referenced by
+    // any use case.( when this array is not empty, this means that some use case are missing)
+    var extra_user_stories = _.difference(requirement.implementing_user_stories,use_case_us);
+
+    //xx project.user_story_that_implements_requirement(use_case,requirement);
+    var weight = get_weight(requirement.implementing_user_stories) + uncovered_use_cases.length * 2.0;
+
+    if (weight === 0) {    weight = 1.0;      }
+
+    var score  = requirement.implementing_user_stories.reduce(function(c,work_item){
+        return c + work_item.weight * work_item.percent_done();
+    },0);
+
+    var score  = done_user_stories.length;
+
+    var statistics = {
+        nb_use_cases:    requirement.nominal_use_cases.length,
+        nb_uncovered_use_cases:  uncovered_use_cases.length,
+        nb_user_stories: requirement.implementing_user_stories.length,
+        nb_user_stories_done: done_user_stories.length,
+        weight: weight,
+        score: score,
+        covered_percent: Math.round(score/weight * 100,2)
+    }
+    requirement.statistics = statistics;
+
+    // build requirement details
+
+    requirement.use_case_details   = use_case_details;
+    requirement.extra_user_stories = extra_user_stories;
+}
+function pass_args(functor,data) {
+    return function(arg) {  return functor(arg,data); }
+}
+
+
+Project.prototype.calculate_requirement_coverage = function() {
+
+    var project = this;
+
+    project.requirements.forEach(pass_args(evaluate_requirement_statistics, project));
+    var total_weight = project.requirements.reduce(function (current, element) {
+        return current + element.statistics.weight;
+    }, 0);
+    var total_score = project.requirements.reduce(function (current, element) {
+        return current + element.statistics.score;
+    }, 0);
+
+    var covered_percent = Math.round(total_score / total_weight * 100,2);
+
+    project.requirements_statistics = {
+        total_score: total_score,
+        total_weight: total_weight,
+        covered_percent: covered_percent
+    };
+
+}
+
+Project.prototype.dump_requirement_coverage = function() {
+    var project  = this;
+    if (!project.requirements_statistics) {
+        project.calculate_requirement_coverage();
+    }
+
+    console.log(" total_score  =", project.requirements_statistics.total_score);
+    console.log(" total_weight =", project.requirements_statistics.total_weight);
+    console.log(" percent done =", project.requirements_statistics.covered_percent);
+
+    project.requirements.forEach(function(requirement){
+        console.log("-------------------------------------");
+        console.log(requirement.subject);
+        console.log(requirement.statistics);
+
+        console.log("  US: ",requirement.implementing_user_stories.map(_.property("subject")));
+
+        requirement.use_case_details.forEach(function(detail){
+            console.log("detail UC: ",detail.use_case.subject , " status : " , detail.status );
+            console.log("       US: ",detail.user_stories.map(_.property("subject")));
+
+        });
+        console.log("EXTRA  US: ",requirement.extra_user_stories.map(_.property("subject")));
+    });
+}
+
+Project.prototype.export_requirement_coverage_CSV = function() {
+
+    var project = this;
+    var fs = require('fs');
+    var stream = fs.createWriteStream("my_file.csv");
+    stream.once('open', function(fd) {
+
+        var c = 0;
+        function field(value) {
+
+            if (c>0) {
+                stream.write(";");
+            }
+            stream.write('"' , value ,"'");
+            c+=1;
+        }
+        function endline() {
+            stream.write("\n");
+            c=0;
+        }
+        field("total   score"); field(project.requirements_statistics.total_score); endline();
+        field("total   weight"); field(project.requirements_statistics.total_weight); endline();
+        field("percent done"); field(project.requirements_statistics.covered_percent);endline();
+
+        field("requirement_id"); field("requirement_subject");
+        field("usecase_id"); field("usecase subject");
+        endline();
+        project.requirements.forEach(function(requirement){
+           field(requirement.id);
+           field(requirement.subject);
+
+            requirement.use_case_details.forEach(function(detail){
+                field(requirement.id);
+                field(requirement.subject);
+                field(detail.use_case.id);
+                field(detail.use_case.subject);
+                detail.user_stories.forEach(function(us) {
+                    field(us.id);
+                    field(us.subject);
+                });
+                endline();
+
+            });
+            field(requirement.id);
+            field(requirement.subject);
+            field("");
+            field("");
+            requirement.extra_user_stories.forEach(function(us){
+                field(us.id);
+                field(us.subject);
+            });
+            endline();
+        });
+
+
+        stream.end();
+    });
+};
+
+},{"../":40,"./workitem":57,"colors":59,"fs":1,"underscore":63}],54:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -13081,7 +13600,28 @@ exports.calculateNumberOfNonBusinessDays = calculateNumberOfNonBusinessDays
 exports.diffDate         = diffDate;
 exports.build_time_line  = build_time_line;   
 
-},{"./today":54,"assert":2}],54:[function(require,module,exports){
+},{"./today":55,"assert":2}],55:[function(require,module,exports){
+// The MIT License (MIT)
+//
+// Copyright (c) 2014 Etienne Rossignon
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 /**
  * @method  Today
  * mockable method returning Today's date
@@ -13098,7 +13638,7 @@ Today.set = function(date) {
 }
 exports.Today = Today;
 
-},{}],55:[function(require,module,exports){
+},{}],56:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -13143,7 +13683,7 @@ function dateToYMD(date) {
 
 exports.ellipsys = ellipsys;
 exports.dateToYMD = dateToYMD;
-},{}],56:[function(require,module,exports){
+},{}],57:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -13175,6 +13715,7 @@ exports.dateToYMD = dateToYMD;
  *
  */
 var assert = require("assert");
+var _ = require("underscore");
 
 var HashMap = require("./hashmap").HashMap;
 var tl = require('./timeline');
@@ -13209,10 +13750,10 @@ function WorkItem(options) {
     this.relations = [];
     this.blocked_by = [];
     this.children = [];
-    this.defects = [];
     this.type = "U-S"; // user story
     this.fixed_version = "SomeVersion";
     this.journal = [];
+
 
     if (typeof options === typeof {}) {
         var fields = {
@@ -13261,19 +13802,50 @@ function WorkItem(options) {
 }
 
 
+/**
+ * @property unplanned  {Boolean} : true if this work item has been put aside of the project
+ */
 WorkItem.prototype.__defineGetter__("unplanned",function() {
     return !this.fixed_version || this.fixed_version === "unplanned";
 });
 
+/**
+ * @property  user_stories {Array<WorkItem>}: the user_stories of this work_item
+ */
 WorkItem.prototype.__defineGetter__("user_stories",function() {
     return this.children.filter(function(workitem){ return workitem.type === "U-S"; });
 });
 
+/**
+ * @property  use_cases {Array<WorkItem>}: the use_cases of this work_item
+ */
 WorkItem.prototype.__defineGetter__("use_cases",function() {
     return this.children.filter(function(workitem){ return workitem.type === "U-C"; });
 });
 
+/**
+ * @property  defects {Array<WorkItem>}: the defects directly attached to this work_item
+ */
+WorkItem.prototype.__defineGetter__("defects",function() {
+    return this.children.filter(function(workitem){ return workitem.type === "BUG"; });
+});
 
+/**
+ * @property  weight {Number} the weight of this workitem
+ */
+WorkItem.prototype.__defineGetter__("weight",function() {
+   return this.type === "BUG" ? 0.2 : 1.0;
+});
+
+
+/**
+ * reset work item
+ */
+WorkItem.prototype.reset = function() {
+
+    this.children = [];
+    this.stats = null;
+}
 
 //WorkItem.createFromJSON = function(jsonObj) {
 //
@@ -13292,7 +13864,6 @@ function consolidated_percent_done(collection) {
     var total = 0;
 
     if (!collection) return 0;
-    if (collection.length === 0) return 0;
 
     collection.forEach(function (workitem) {
 
@@ -13300,28 +13871,32 @@ function consolidated_percent_done(collection) {
             // ignore unplanned element
             return;
         }
-        total += workitem.percent_done();
-        nb_el += 1;
+        total += workitem.percent_done() * workitem.weight;
+        nb_el += workitem.weight;
     });
     if (nb_el === 0) return 0;
     return Math.round(total / nb_el);
 }
 
+function get_weight(collection) {
+   return _.reduce(collection,function(c,work_item) { return c + work_item.weight; },0);
+}
+
 exports.private = {};
 exports.private.consolidated_percent_done = consolidated_percent_done;
+exports.private.get_weight = get_weight;
 
 function get_adjusted_raw_done_ratio(workitem) {
-    if (!workitem)  {
-      return 0;
-    }
+
     if (workitem.current_status === "Done") {
       return 100;
     }
     if (!workitem.done_ratio) {
       return 0;
     }
-    return  workitem.done_ratio;
+    return workitem.done_ratio;
 }
+
 
 WorkItem.prototype.is_in_progress = function () {
 
@@ -13342,10 +13917,10 @@ WorkItem.prototype.is_done = function () {
     return this.percent_done() > 99.999;
 };
 
-WorkItem.prototype.adjust_done_ratio = function () {
-    this.done_ratio = get_adjusted_raw_done_ratio(this);
-};
-
+//WorkItem.prototype.adjust_done_ratio = function () {
+//    this.done_ratio = get_adjusted_raw_done_ratio(this);
+//};
+//
 
 WorkItem.prototype.percent_done = function () {
 
@@ -13355,26 +13930,52 @@ WorkItem.prototype.percent_done = function () {
         if (this.children.length === 0) {
             return 0.0;
         }
-        var p_us =  consolidated_percent_done(this.children);
-        var p_ano = consolidated_percent_done(this.defects);
-        var n_us =  this.children.length;
-        var n_ano = this.defects.length;
-        if (n_us + n_ano === 0) return 0;
-        //xx console.warn(" ---------------- [ ", p_us, p_ano, n_us, n_ano)
-        return Math.round((p_us * 80 * n_us + p_ano * 20 * n_ano) / (n_us * 80 + n_ano * 20));
+        return consolidated_percent_done(this.children);
+//        var p_us =  consolidated_percent_done(this.children);
+//        var p_ano = consolidated_percent_done(this.defects);
+//        var n_us =  this.children.length;
+//        var n_ano = this.defects.length;
+//        if (n_us + n_ano === 0) return 0;
+//        //xx console.warn(" ---------------- [ ", p_us, p_ano, n_us, n_ano)
+//        return Math.round((p_us * 80 * n_us + p_ano * 20 * n_ano) / (n_us * 80 + n_ano * 20));
 
     }
     if (this.type === "U-S") {
 
-        return get_adjusted_raw_done_ratio(this);
+        assert( this.use_cases.length === 0, " a user story shall not have children that are Use Cases");
 
-        var p_us = get_adjusted_raw_done_ratio(this);
-        var p_ano = consolidated_percent_done(this.defects);
+        var sub_user_stories = this.user_stories;
+        if (sub_user_stories.length >0 ) {
+            // this user story has been split into multiple user stories.
+            // in this case we make the assumption that the percentage of this user story
+            return consolidated_percent_done(this.children);
+        } else {
 
-        var n_us = 1;
-        var n_ano = this.defects.size();
-        // console.warn(" ---------------- [ ", p_us,p_ano,n_us,n_ano)
-        return Math.round((p_us * 80 * n_us + p_ano * 20 * n_ano) / (100 * (n_us + n_ano)));
+            // this is a standalone user story
+            // we shall use the raw done ratio
+            var raw_percent_done = get_adjusted_raw_done_ratio(this);
+            //xx return raw_percent_done;
+
+            // Todo: handle effect of attached bugs on done_ratio
+            var defects_and_me = this.defects;
+           //xx assert(defects_and_me.length === 0);
+            defects_and_me.push({
+                unplanned: this.unplanned,
+                weight: this.weight,
+                percent_done: function() { return raw_percent_done; }
+            });
+
+            return consolidated_percent_done(defects_and_me);
+
+        }
+/*
+
+ */
+//        var p_us = get_adjusted_raw_done_ratio(this);
+//        var p_ano = consolidated_percent_done(this.defects);
+//        var n_us = 1;
+//        // console.warn(" ---------------- [ ", p_us,p_ano,n_us,n_ano)
+//        return Math.round((p_us * 80 * n_us + p_ano * 20 * n_ano) / (n_us * 80 + n_ano * 20));
 
     } else {
         return get_adjusted_raw_done_ratio(this);
@@ -13426,9 +14027,10 @@ WorkItem.prototype.find_status_at_date = function (ref_date) {
 
 
 /**
- *  find_starting_date
- *  returns the date at which the work item went from
- *  new to In Progress or Done.
+ *  @method find_starting_date
+ *
+ *  @return the date at which the work item went from
+ *          new to In Progress or Done.
  */
 WorkItem.prototype.find_starting_date = function () {
     for (var i = 0; i < this.journal.length; i++) {
@@ -13439,10 +14041,13 @@ WorkItem.prototype.find_starting_date = function () {
     }
     return undefined;
 };
+
 /**
- *  find_completion_date
- *  returns the date at which the work item went from
- *  In Progress to "Done"
+ *  @method find_completion_date
+ *
+ *  @return the date at which the work item went from
+ *          "In Progress" to "Done", or undefined
+ *          if the item is not done yet.
  */
 WorkItem.prototype.find_completion_date = function () {
    //TODO
@@ -13585,10 +14190,6 @@ function sort_work_item_map(map) {
     var v = compare_string(e1.fixed_version, e2.fixed_version);
     if (v !== 0) return v;
 
-//    var v2 = compare_number(get_adjusted_raw_done_ratio(e1),get_adjusted_raw_done_ratio(e2));
-//    if(v2!==0) return v2;
-
-
     var v3 = compare_number(e2.percent_done(), e1.percent_done());
     if (v3 !== 0) return v3;
     var v4 = compare_string(e1.current_status, e2.current_status);
@@ -13615,7 +14216,7 @@ WorkItem.prototype.sort_defects = function () {
 exports.WorkItem = WorkItem;
 
 
-},{"./hashmap":44,"./timeline":53,"./today":54,"assert":2}],57:[function(require,module,exports){
+},{"./hashmap":44,"./timeline":54,"./today":55,"assert":2,"underscore":63}],58:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -13686,7 +14287,351 @@ exports.get_start_date = get_start_date;
 exports.get_projet_names = get_projet_names;
 exports.get_last_updated_date = get_last_updated_date;
 
-},{"assert":2}],58:[function(require,module,exports){
+},{"assert":2}],59:[function(require,module,exports){
+/*
+colors.js
+
+Copyright (c) 2010
+
+Marak Squires
+Alexis Sellier (cloudhead)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+*/
+
+var isHeadless = false;
+
+if (typeof module !== 'undefined') {
+  isHeadless = true;
+}
+
+if (!isHeadless) {
+  var exports = {};
+  var module = {};
+  var colors = exports;
+  exports.mode = "browser";
+} else {
+  exports.mode = "console";
+}
+
+//
+// Prototypes the string object to have additional method calls that add terminal colors
+//
+var addProperty = function (color, func) {
+  exports[color] = function (str) {
+    return func.apply(str);
+  };
+  String.prototype.__defineGetter__(color, func);
+};
+
+function stylize(str, style) {
+
+  var styles;
+
+  if (exports.mode === 'console') {
+    styles = {
+      //styles
+      'bold'      : ['\x1B[1m',  '\x1B[22m'],
+      'italic'    : ['\x1B[3m',  '\x1B[23m'],
+      'underline' : ['\x1B[4m',  '\x1B[24m'],
+      'inverse'   : ['\x1B[7m',  '\x1B[27m'],
+      'strikethrough' : ['\x1B[9m',  '\x1B[29m'],
+      //text colors
+      //grayscale
+      'white'     : ['\x1B[37m', '\x1B[39m'],
+      'grey'      : ['\x1B[90m', '\x1B[39m'],
+      'black'     : ['\x1B[30m', '\x1B[39m'],
+      //colors
+      'blue'      : ['\x1B[34m', '\x1B[39m'],
+      'cyan'      : ['\x1B[36m', '\x1B[39m'],
+      'green'     : ['\x1B[32m', '\x1B[39m'],
+      'magenta'   : ['\x1B[35m', '\x1B[39m'],
+      'red'       : ['\x1B[31m', '\x1B[39m'],
+      'yellow'    : ['\x1B[33m', '\x1B[39m'],
+      //background colors
+      //grayscale
+      'whiteBG'     : ['\x1B[47m', '\x1B[49m'],
+      'greyBG'      : ['\x1B[49;5;8m', '\x1B[49m'],
+      'blackBG'     : ['\x1B[40m', '\x1B[49m'],
+      //colors
+      'blueBG'      : ['\x1B[44m', '\x1B[49m'],
+      'cyanBG'      : ['\x1B[46m', '\x1B[49m'],
+      'greenBG'     : ['\x1B[42m', '\x1B[49m'],
+      'magentaBG'   : ['\x1B[45m', '\x1B[49m'],
+      'redBG'       : ['\x1B[41m', '\x1B[49m'],
+      'yellowBG'    : ['\x1B[43m', '\x1B[49m']
+    };
+  } else if (exports.mode === 'browser') {
+    styles = {
+      //styles
+      'bold'      : ['<b>',  '</b>'],
+      'italic'    : ['<i>',  '</i>'],
+      'underline' : ['<u>',  '</u>'],
+      'inverse'   : ['<span style="background-color:black;color:white;">',  '</span>'],
+      'strikethrough' : ['<del>',  '</del>'],
+      //text colors
+      //grayscale
+      'white'     : ['<span style="color:white;">',   '</span>'],
+      'grey'      : ['<span style="color:gray;">',    '</span>'],
+      'black'     : ['<span style="color:black;">',   '</span>'],
+      //colors
+      'blue'      : ['<span style="color:blue;">',    '</span>'],
+      'cyan'      : ['<span style="color:cyan;">',    '</span>'],
+      'green'     : ['<span style="color:green;">',   '</span>'],
+      'magenta'   : ['<span style="color:magenta;">', '</span>'],
+      'red'       : ['<span style="color:red;">',     '</span>'],
+      'yellow'    : ['<span style="color:yellow;">',  '</span>'],
+      //background colors
+      //grayscale
+      'whiteBG'     : ['<span style="background-color:white;">',   '</span>'],
+      'greyBG'      : ['<span style="background-color:gray;">',    '</span>'],
+      'blackBG'     : ['<span style="background-color:black;">',   '</span>'],
+      //colors
+      'blueBG'      : ['<span style="background-color:blue;">',    '</span>'],
+      'cyanBG'      : ['<span style="background-color:cyan;">',    '</span>'],
+      'greenBG'     : ['<span style="background-color:green;">',   '</span>'],
+      'magentaBG'   : ['<span style="background-color:magenta;">', '</span>'],
+      'redBG'       : ['<span style="background-color:red;">',     '</span>'],
+      'yellowBG'    : ['<span style="background-color:yellow;">',  '</span>']
+    };
+  } else if (exports.mode === 'none') {
+    return str + '';
+  } else {
+    console.log('unsupported mode, try "browser", "console" or "none"');
+  }
+  return styles[style][0] + str + styles[style][1];
+}
+
+function applyTheme(theme) {
+
+  //
+  // Remark: This is a list of methods that exist
+  // on String that you should not overwrite.
+  //
+  var stringPrototypeBlacklist = [
+    '__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__', 'charAt', 'constructor',
+    'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString', 'toString', 'valueOf', 'charCodeAt',
+    'indexOf', 'lastIndexof', 'length', 'localeCompare', 'match', 'replace', 'search', 'slice', 'split', 'substring',
+    'toLocaleLowerCase', 'toLocaleUpperCase', 'toLowerCase', 'toUpperCase', 'trim', 'trimLeft', 'trimRight'
+  ];
+
+  Object.keys(theme).forEach(function (prop) {
+    if (stringPrototypeBlacklist.indexOf(prop) !== -1) {
+      console.log('warn: '.red + ('String.prototype' + prop).magenta + ' is probably something you don\'t want to override. Ignoring style name');
+    }
+    else {
+      if (typeof(theme[prop]) === 'string') {
+        addProperty(prop, function () {
+          return exports[theme[prop]](this);
+        });
+      }
+      else {
+        addProperty(prop, function () {
+          var ret = this;
+          for (var t = 0; t < theme[prop].length; t++) {
+            ret = exports[theme[prop][t]](ret);
+          }
+          return ret;
+        });
+      }
+    }
+  });
+}
+
+
+//
+// Iterate through all default styles and colors
+//
+var x = ['bold', 'underline', 'strikethrough', 'italic', 'inverse', 'grey', 'black', 'yellow', 'red', 'green', 'blue', 'white', 'cyan', 'magenta', 'greyBG', 'blackBG', 'yellowBG', 'redBG', 'greenBG', 'blueBG', 'whiteBG', 'cyanBG', 'magentaBG'];
+x.forEach(function (style) {
+
+  // __defineGetter__ at the least works in more browsers
+  // http://robertnyman.com/javascript/javascript-getters-setters.html
+  // Object.defineProperty only works in Chrome
+  addProperty(style, function () {
+    return stylize(this, style);
+  });
+});
+
+function sequencer(map) {
+  return function () {
+    if (!isHeadless) {
+      return this.replace(/( )/, '$1');
+    }
+    var exploded = this.split(""), i = 0;
+    exploded = exploded.map(map);
+    return exploded.join("");
+  };
+}
+
+var rainbowMap = (function () {
+  var rainbowColors = ['red', 'yellow', 'green', 'blue', 'magenta']; //RoY G BiV
+  return function (letter, i, exploded) {
+    if (letter === " ") {
+      return letter;
+    } else {
+      return stylize(letter, rainbowColors[i++ % rainbowColors.length]);
+    }
+  };
+})();
+
+exports.themes = {};
+
+exports.addSequencer = function (name, map) {
+  addProperty(name, sequencer(map));
+};
+
+exports.addSequencer('rainbow', rainbowMap);
+exports.addSequencer('zebra', function (letter, i, exploded) {
+  return i % 2 === 0 ? letter : letter.inverse;
+});
+
+exports.setTheme = function (theme) {
+  if (typeof theme === 'string') {
+    try {
+      exports.themes[theme] = require(theme);
+      applyTheme(exports.themes[theme]);
+      return exports.themes[theme];
+    } catch (err) {
+      console.log(err);
+      return err;
+    }
+  } else {
+    applyTheme(theme);
+  }
+};
+
+
+addProperty('stripColors', function () {
+  return ("" + this).replace(/\x1B\[\d+m/g, '');
+});
+
+// please no
+function zalgo(text, options) {
+  var soul = {
+    "up" : [
+      '̍', '̎', '̄', '̅',
+      '̿', '̑', '̆', '̐',
+      '͒', '͗', '͑', '̇',
+      '̈', '̊', '͂', '̓',
+      '̈', '͊', '͋', '͌',
+      '̃', '̂', '̌', '͐',
+      '̀', '́', '̋', '̏',
+      '̒', '̓', '̔', '̽',
+      '̉', 'ͣ', 'ͤ', 'ͥ',
+      'ͦ', 'ͧ', 'ͨ', 'ͩ',
+      'ͪ', 'ͫ', 'ͬ', 'ͭ',
+      'ͮ', 'ͯ', '̾', '͛',
+      '͆', '̚'
+    ],
+    "down" : [
+      '̖', '̗', '̘', '̙',
+      '̜', '̝', '̞', '̟',
+      '̠', '̤', '̥', '̦',
+      '̩', '̪', '̫', '̬',
+      '̭', '̮', '̯', '̰',
+      '̱', '̲', '̳', '̹',
+      '̺', '̻', '̼', 'ͅ',
+      '͇', '͈', '͉', '͍',
+      '͎', '͓', '͔', '͕',
+      '͖', '͙', '͚', '̣'
+    ],
+    "mid" : [
+      '̕', '̛', '̀', '́',
+      '͘', '̡', '̢', '̧',
+      '̨', '̴', '̵', '̶',
+      '͜', '͝', '͞',
+      '͟', '͠', '͢', '̸',
+      '̷', '͡', ' ҉'
+    ]
+  },
+  all = [].concat(soul.up, soul.down, soul.mid),
+  zalgo = {};
+
+  function randomNumber(range) {
+    var r = Math.floor(Math.random() * range);
+    return r;
+  }
+
+  function is_char(character) {
+    var bool = false;
+    all.filter(function (i) {
+      bool = (i === character);
+    });
+    return bool;
+  }
+
+  function heComes(text, options) {
+    var result = '', counts, l;
+    options = options || {};
+    options["up"] = options["up"] || true;
+    options["mid"] = options["mid"] || true;
+    options["down"] = options["down"] || true;
+    options["size"] = options["size"] || "maxi";
+    text = text.split('');
+    for (l in text) {
+      if (is_char(l)) {
+        continue;
+      }
+      result = result + text[l];
+      counts = {"up" : 0, "down" : 0, "mid" : 0};
+      switch (options.size) {
+      case 'mini':
+        counts.up = randomNumber(8);
+        counts.min = randomNumber(2);
+        counts.down = randomNumber(8);
+        break;
+      case 'maxi':
+        counts.up = randomNumber(16) + 3;
+        counts.min = randomNumber(4) + 1;
+        counts.down = randomNumber(64) + 3;
+        break;
+      default:
+        counts.up = randomNumber(8) + 1;
+        counts.mid = randomNumber(6) / 2;
+        counts.down = randomNumber(8) + 1;
+        break;
+      }
+
+      var arr = ["up", "mid", "down"];
+      for (var d in arr) {
+        var index = arr[d];
+        for (var i = 0 ; i <= counts[index]; i++) {
+          if (options[index]) {
+            result = result + soul[index][randomNumber(soul[index].length)];
+          }
+        }
+      }
+    }
+    return result;
+  }
+  return heComes(text);
+}
+
+
+// don't summon zalgo
+addProperty('zalgo', function () {
+  return zalgo(this);
+});
+
+},{}],60:[function(require,module,exports){
 /*global exports,require*/
 var lib = require("./lib/serialijse");
 exports.serialize = lib.serialize;
@@ -13695,7 +14640,7 @@ exports.serializeZ = lib.serializeZ;
 exports.deserializeZ = lib.deserializeZ;
 exports.declarePersistable = lib.declarePersistable;
 
-},{"./lib/serialijse":59}],59:[function(require,module,exports){
+},{"./lib/serialijse":61}],61:[function(require,module,exports){
 /*global module*/
 (function () {
     "use strict";
@@ -13894,7 +14839,14 @@ exports.declarePersistable = lib.declarePersistable;
             cache[object_id] = obj;
             for (v in data) {
                 if (data.hasOwnProperty(v)) {
-                    obj[v] = deserialize_node_or_value(data[v]);
+                    try {
+                       obj[v] = deserialize_node_or_value(data[v]);
+                    } 
+                    catch(err) {
+                      console.log(" property : ", v);
+                      console.log(err);
+                      throw err;
+                    }
                 }
             }
             return obj;
@@ -13936,7 +14888,7 @@ exports.declarePersistable = lib.declarePersistable;
 }());
 
 
-},{"assert":2,"underscore":60,"zlib":17}],60:[function(require,module,exports){
+},{"assert":2,"underscore":62,"zlib":17}],62:[function(require,module,exports){
 //     Underscore.js 1.6.0
 //     http://underscorejs.org
 //     (c) 2009-2014 Jeremy Ashkenas, DocumentCloud and Investigative Reporters & Editors
@@ -15281,6 +16233,6 @@ exports.declarePersistable = lib.declarePersistable;
   }
 }).call(this);
 
-},{}],61:[function(require,module,exports){
-module.exports=require(60)
+},{}],63:[function(require,module,exports){
+module.exports=require(62)
 },{}]},{},[40]);

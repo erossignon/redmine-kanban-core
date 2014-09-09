@@ -218,5 +218,11 @@ describe("RequirementCoverage",function(){
 
         project.requirements_statistics.total_weight.should.eql(11);
 
+    });
+
+    it("should calculate requirement coverage",function(done) {
+
+        var filename = "tmp.csv";
+        project.export_requirement_coverage_CSV(filename,done);
     })
 });
