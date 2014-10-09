@@ -119,7 +119,18 @@
             var d2 = new Date("2012/06/01");
             tl.diffDate(d2, d1).should.equal(1);
         });
-
+        it("should return 2 for diff date between today and tommorrow", function () {
+            //
+            var d1 = new Date("2012/06/01");
+            var d2 = new Date("2012/06/02");
+            tl.diffDate(d1, d2).should.equal(2);
+        });
+        it("should return -2 for diff date between tommorrow and today", function () {
+            //
+            var d1 = new Date("2012/06/01");
+            var d2 = new Date("2012/06/02");
+            tl.diffDate(d2, d1).should.equal(-2);
+        });
     });
 
     describe("testing calculateNumberOfNonBusinessDays", function () {

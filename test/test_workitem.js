@@ -99,6 +99,9 @@
                 it("should report a status of 'Done' for a date after its creation date",function() {
                     work_item.find_status_at_date(monday.next_day(10)).should.equal("Done");
                 });
+
+
+
             });
         });
 
@@ -306,6 +309,51 @@
             work_item.calculate_lead_time(thursday, true).should.equal(4);
 
         });
+    });
+
+
+    describe("get_creation_date", function() {
+
+        var monday = new Date("2013/07/01");
+        var tuesday = monday.next_day(1);
+        var wednesday = monday.next_day(2);
+        var thursday = monday.next_day(3);
+
+        var w1 = new WorkItem({ created_on: tuesday});
+        var w2 = new WorkItem({ created_on: wednesday});
+        var w3 = new WorkItem({ created_on: monday});
+
+        var wip1 = new WorkItem({ created_on: tuesday});
+        wip1.set_status(wednesday, "In Progress");
+
+        var wip2 = new WorkItem({ created_on: wednesday});
+        wip2.set_status(thursday, "In Progress");
+
+        var done4 = new WorkItem({ created_on: monday});
+        done4.set_status(wednesday, "In Progress");
+        done4.set_status(thursday, "Done");
+
+        var get_creation_date = require("../").get_creation_date;
+        var get_starting_date = require("../").get_starting_date;
+
+        it("should get the creation date of a set of workitems",function() {
+
+             get_creation_date([w1,w2,w3]).should.eql(monday);
+
+        });
+        it("should return that the starting date is undefined if none of the work items has started yet",function() {
+
+            should(get_starting_date([w1,w2,w3])).eql(undefined);
+
+        });
+        it("should return the earliest date of all wip items",function() {
+            should(get_starting_date([w1,wip1])).eql(wednesday);
+        });
+        it("should return the earliest date of all wip items",function() {
+            should(get_starting_date([w1,wip1,wip2,done4])).eql(wednesday);
+        });
+
+
     });
 
 })();

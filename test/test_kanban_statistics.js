@@ -10,19 +10,19 @@
     describe("Kanban Statistics", function(){
         var project = require("./fixture_fake_project_1").project,
             tickets = project.tickets,
-            start_date = project.start,
-            end_date = start_date.addBusinessDay(20),
-            timeline = tl.build_time_line(start_date, end_date);
+            startDate = project.start,
+            endDate = startDate.addBusinessDay(20),
+            timeline = tl.build_time_line(startDate, endDate);
 
         describe("testing Kanban Statistics - Work In Progress", function () {
 
 
-            var monday = start_date,
+            var monday = startDate,
                 tuesday  = monday.next_day(1),
                 wednesday = monday.next_day(2),
                 thursday = monday.next_day(3),
                 friday   = monday.next_day(4),
-                next_monday = start_date.next_day(7),
+                next_monday = startDate.next_day(7),
                 next_tuesday  = next_monday.next_day(1),
                 next_wednesday = next_monday.next_day(2);
 
@@ -113,7 +113,7 @@
 
                 var stat = statistics(project.tickets);
 
-                stat.start_date.should.eql(new Date("Wed Jun 04 2014 00:00:00 GMT+0200 (CEST)"));
+                stat.startDate.should.eql(new Date("Wed Jun 05 2014 00:00:00 GMT+0200 (CEST)"));
 
             }) ;
         });

@@ -12,7 +12,9 @@ require("./lib/associate_requirements");
 require("./lib/requirement_matrix");
 
 exports.get_projet_names = require("./lib/workitem_utils").get_projet_names;
-exports.get_start_date = require("./lib/workitem_utils").get_start_date;
+exports.get_starting_date = require("./lib/workitem_utils").get_starting_date;
+exports.get_creation_date = require("./lib/workitem_utils").get_creation_date;
+
 exports.get_last_updated_date = require("./lib/workitem_utils").get_last_updated_date;
 exports.dateToYMD = require("./lib/utils").dateToYMD;
 exports.dump_use_cases = require("./lib/dump_workitems").dump_use_cases;
