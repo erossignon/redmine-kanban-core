@@ -66,6 +66,8 @@
                 var wip = calculate_wip(tickets, far_later);
                 wip.should.eql({ date: far_later , proposed: 0, planned: 0, in_progress: 0, done: 3});
             });
+
+
         });
 
         describe("testing Kanban Statistics - Throughput", function () {
@@ -100,6 +102,21 @@
 
         });
 
+
+        describe("testing Kanban Statistics - Statistics", function () {
+
+            it("should calculate start date based on oldest ticket",function() {
+
+                var project = require("./fixture_fake_project_1").project;
+
+                var statistics = require("../lib/kanbanstatistics").statistics;
+
+                var stat = statistics(project.tickets);
+
+                stat.start_date.should.eql(new Date("Wed Jun 04 2014 00:00:00 GMT+0200 (CEST)"));
+
+            }) ;
+        });
     });
 
 })();

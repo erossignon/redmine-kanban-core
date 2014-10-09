@@ -11247,6 +11247,12 @@ Project.prototype.associate_requirements = function () {
         var use_cases = requirement.relations.map(_find_work_item).filter(_is_use_case);
 
         var user_stories = requirement.relations.map(_find_work_item).filter(_is_user_story);
+        if (false && requirement.relations.length) {
+            console.log(" RQT" , requirement.id, requirement.subject) ;
+            console.log("    relations ",requirement.relations);
+            console.log("    use_cases =",use_cases.map(function(us){return us.id; }));
+            console.log("    user_stories =",user_stories.map(function(us){return us.id; }));
+        }
 
         requirement.nominal_use_cases = use_cases;
         requirement.implementing_user_stories = user_stories;
@@ -11344,7 +11350,7 @@ function _extract_uncovered_requirements(project,work_item) {
 
 }
 
-function subject(e) { return e.subject; }
+function subject(e) { return "#" + e.id + " : " + e.subject; }
 
 function _extract_extraneous_requirements(project,work_item) {
     // extract the requirements that  have been covered for work_item but are not explicitly specified
@@ -11557,7 +11563,7 @@ Project.prototype.associate_use_case_and_user_stories = function() {
                 var related_ticket = self.find_work_item(relation_id);
                 if (related_ticket.type === "U-S") {
                     ticket.parent_id = relation_id;
-                    return us;
+                    return related_ticket;
                 }
                 if (related_ticket.type === "U-C") {
                     // l'anomalie est rattachée à une UC par relation
@@ -12690,12 +12696,25 @@ var deserialize = require("serialijse").deserialize;
 var declarePersistable = require("serialijse").declarePersistable;
 
 
+/**
+ *
+ * @param options
+ * @param options.tickets [optional] {WorkItem[]} a collection of work items to add to the project
+ * @param options.url_issue [optional] {String}  a template string to format the url
+ *        for instance :  "http://www.reddmine.org/redmine/issues/%d"
+ * @constructor
+ */
 function Project(options) {
+
+    options = options || {};
+
     this._work_items = [];
     this._index = {};
 
+    this.url_issue = options.url_issue || "#%d";
+
     var self = this;
-    if (options && options.tickets) {
+    if (options.tickets) {
         options.tickets.forEach(function (t) {
             self.add_work_item(t);
         });
@@ -12744,7 +12763,9 @@ Project.prototype.loadString = function (dataString, options,callback) {
 
     self._work_items = [];
     try {
-        self._work_items = deserialize(dataString);
+        var obj  =deserialize(dataString);
+        self._work_items = obj.work_items;
+        self.url_issue = obj.url_issue;
         assert(_.isArray(self._work_items), " expecting an array here");
 
         // rebuild index;
@@ -12784,7 +12805,10 @@ Project.prototype.load = function (filename, callback) {
 Project.prototype.saveString = function (callback) {
     assert(_.isFunction(callback));
     var self = this;
-    var serializationString = serialize(self._work_items);
+    var serializationString = serialize({
+        work_items: self._work_items ,
+        url_issue: self.url_issue
+    });
     callback(null,serializationString);
 };
 
@@ -13033,6 +13057,11 @@ Project.prototype.calculate_requirement_coverage = function() {
 
     var project = this;
 
+    if (!project.requirements) {
+        // throw  new Error("requirements hasn't been computed, have you called Project.associate_requirements() ?")
+        project.associate_requirements();
+        assert (project.requirements != null );
+    }
     project.requirements.forEach(pass_args(evaluate_requirement_statistics, project));
     var total_weight = project.requirements.reduce(function (current, element) {
         return current + element.statistics.weight;
@@ -13061,82 +13090,171 @@ Project.prototype.dump_requirement_coverage = function() {
     console.log(" total_weight =", project.requirements_statistics.total_weight);
     console.log(" percent done =", project.requirements_statistics.covered_percent);
 
+    function info(workitem) {
+        return "#"+ workitem.id + " " + workitem.current_status  + " : " + workitem.subject ;
+    }
     project.requirements.forEach(function(requirement){
         console.log("-------------------------------------");
-        console.log(requirement.subject);
+        console.log(requirement.subject );
         console.log(requirement.statistics);
 
-        console.log("  US: ",requirement.implementing_user_stories.map(_.property("subject")));
+        //xx console.log("  US: ",requirement.implementing_user_stories.map(info));
 
         requirement.use_case_details.forEach(function(detail){
-            console.log("detail UC: ",detail.use_case.subject , " status : " , detail.status );
-            console.log("       US: ",detail.user_stories.map(_.property("subject")));
+            console.log("*-> UC      :  ",info(detail.use_case) );
+            detail.user_stories.forEach(function(wi) {
+                console.log("     +-> US :  ",info(wi));
+            });
 
         });
-        console.log("EXTRA  US: ",requirement.extra_user_stories.map(_.property("subject")));
+        if (requirement.extra_user_stories.length >0 ) {
+            console.log("*- orphan US: ");
+            requirement.extra_user_stories.forEach(function(wi) {
+                console.log("     +-> US :  ",info(wi));
+            });
+        }
+
     });
 }
 
-Project.prototype.export_requirement_coverage_CSV = function() {
+var util = require("util");
+Project.prototype.issue_url = function(id) {
+  return id ? util.format(this.url_issue,id) : "";
+}
+
+Project.prototype.export_requirement_coverage_CSV = function(filename,done) {
 
     var project = this;
+    if (!project.requirements_statistics) {
+        project.calculate_requirement_coverage();
+    }
+
     var fs = require('fs');
-    var stream = fs.createWriteStream("my_file.csv");
-    stream.once('open', function(fd) {
+    var stream = fs.createWriteStream(filename,{ encoding: 'utf8' });
+    stream.on('open', function(fd) {
+        console.log('file has been opened');
+    });
+    stream.on('finish', function () {
+        console.log('file has been written');
+        done();
+    });
+    var c = 0;
+    function field(value) {
 
-        var c = 0;
-        function field(value) {
-
-            if (c>0) {
-                stream.write(";");
-            }
-            stream.write('"' , value ,"'");
-            c+=1;
+        if (c>0) {
+            stream.write(";");
         }
-        function endline() {
-            stream.write("\n");
-            c=0;
+        if (typeof value === "string") {
+            stream.write('"' + value + '"');
+        } else {
+            stream.write(""+value);
         }
-        field("total   score"); field(project.requirements_statistics.total_score); endline();
-        field("total   weight"); field(project.requirements_statistics.total_weight); endline();
-        field("percent done"); field(project.requirements_statistics.covered_percent);endline();
+        c+=1;
+    }
+    function endline() {
+        stream.write("\n");
+        c=0;
+    }
+    field("Total score"); field(project.requirements_statistics.total_score); endline();
+    field("Total weight"); field(project.requirements_statistics.total_weight); endline();
+    field("percent done"); field(project.requirements_statistics.covered_percent);endline();
 
-        field("requirement_id"); field("requirement_subject");
-        field("usecase_id"); field("usecase subject");
-        endline();
-        project.requirements.forEach(function(requirement){
-           field(requirement.id);
-           field(requirement.subject);
+    field("RQ id"); field("RQ subject");field("%rq");
+    field("UC id"); field("UC subject");field("wuc");field("%uc");
+    field("US id"); field("US subject");field("wus");field("%us");
 
-            requirement.use_case_details.forEach(function(detail){
-                field(requirement.id);
-                field(requirement.subject);
-                field(detail.use_case.id);
-                field(detail.use_case.subject);
-                detail.user_stories.forEach(function(us) {
-                    field(us.id);
-                    field(us.subject);
-                });
-                endline();
+    field("RQ URL");
+    field("UC URL");
+    field("US URL");
 
-            });
+    endline();
+    project.requirements.forEach(function(requirement){
+
+        // xx console.log(" REQ ".cyan, requirement.id, requirement.subject,requirement.current_status);
+        // xx console.log("     ", requirement.nominal_use_cases.map(function(w){return w.id;}));
+
+        if (requirement.use_case_details.length ==0 && requirement.extra_user_stories.length==0 ) {
             field(requirement.id);
             field(requirement.subject);
-            field("");
-            field("");
-            requirement.extra_user_stories.forEach(function(us){
-                field(us.id);
-                field(us.subject);
-            });
+            field(0);// field(JSON.stringify(requirement.statistics));
+            // ---------
+            field(0);
+            field("orphan");
+            field(0);
+            field(0);
+            // ---------
+            field(0);
+            field("missing stories");
+            field(0);
+            field(0);
+
+            write_urls({id:0},{id:0},{id:0});
+            endline();
+            return;
+        }
+        function write_requirement(requirement) {
+            field(requirement.id);
+            field(requirement.subject);
+            //Xxfield(JSON.stringify(requirement.statistics));
+            field(requirement.statistics.covered_percent);
+
+        }
+        function write_user_story(us,w) {
+            w = ( w === undefined ) ? 1 : 0;
+            field(us.id);
+            field(us.subject);
+            field(w);
+            field(us.percent_done());
+        }
+        var write_use_case = write_user_story;
+
+        var missing_story = {
+            id: 0, subject:"missing stories", percent_done: function() { return 0;}
+        };
+        var missing_use_case = {
+            id: 0, subject:"orphan", percent_done: function() { return 0;}
+            };
+
+        function write_urls(requirement, use_case, user_story) {
+
+            field(project.issue_url(requirement.id));
+            field(project.issue_url(use_case.id)   );
+            field(project.issue_url(user_story.id) );
+
+        }
+        requirement.use_case_details.forEach(function(detail){
+            if (detail.user_stories.length ==0) {
+                write_requirement(requirement);
+                write_use_case(detail.use_case,1);
+                write_user_story(missing_story,0);
+                write_urls(requirement,detail.use_case,missing_story);
+                endline();
+
+            } else {
+                detail.user_stories.forEach(function(us) {
+                    write_requirement(requirement);
+                    write_use_case(detail.use_case,1);
+                    write_user_story(us,1);
+                    write_urls(requirement,detail.use_case,us);
+                    endline();
+                });
+            }
+
+        });
+        requirement.extra_user_stories.forEach(function(us){
+            write_requirement(requirement);
+            write_use_case(missing_use_case,0);
+            write_user_story(us,1);
+            write_urls(requirement,missing_use_case,us);
             endline();
         });
-
-
-        stream.end();
     });
+
+
+    stream.end();
 };
 
-},{"../":40,"./workitem":57,"colors":59,"fs":1,"underscore":63}],54:[function(require,module,exports){
+},{"../":40,"./workitem":57,"colors":59,"fs":1,"underscore":63,"util":39}],54:[function(require,module,exports){
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Etienne Rossignon
@@ -13739,6 +13857,7 @@ function is_valid_workitem_type(workitem_type) {
  * @param options.complexity    {String}  - the work item complexity.
  * @param options.projet        {String}  - the name of the project the work item has been assigned to.
  * @param options.parent_id     {Integer} - the id of the parent work_item in a hierarchy of work item.
+ * @param options.story_points  {Integer} - the weight of this item in story points
  * @constructor
  */
 function WorkItem(options) {
@@ -13773,7 +13892,8 @@ function WorkItem(options) {
             "priority": "NUMBER",
             "complexity": "(S|M|L|XL|XXL)",
             "current_status": "Done|In Progress|New",
-            "project": "STRING"
+            "project": "STRING",
+            "story_points": "Number"
         };
         var me = this;
         Object.keys(options).forEach(function (field) {
@@ -13834,7 +13954,7 @@ WorkItem.prototype.__defineGetter__("defects",function() {
  * @property  weight {Number} the weight of this workitem
  */
 WorkItem.prototype.__defineGetter__("weight",function() {
-   return this.type === "BUG" ? 0.2 : 1.0;
+   return this.type === "BUG" ? 0.2 : ( this.story_points || 1 );
 });
 
 

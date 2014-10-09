@@ -31,7 +31,7 @@
     "colors": "^0.6.2",
     "enum": "^0.2.6",
     "harmony-collections": "^0.3.8",
-    "serialijse": "^0.0.5",
+    "serialijse": "*",
     "underscore": "^1.6.0"
   },
   "readme": "tools for redmine_kanban",
