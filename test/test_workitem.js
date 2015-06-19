@@ -253,7 +253,7 @@
 
         it("the completion date of a item marked as 'Done' shall match the date the item was marked as done", function () {
             w1.set_status(tuesday, "Done");
-            should(w1.find_completion_date()).equal(tuesday);
+            should(w1.find_completion_date().toString()).equal(tuesday.toString());
         });
 
     });

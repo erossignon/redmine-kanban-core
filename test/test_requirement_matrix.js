@@ -3,8 +3,6 @@ var should =require("should");
 var HashMap = require("../lib/hashmap").HashMap;
 
 var rck = require("../") ;
-var given = it;
-var and = it;
 
 (function () {
     "use strict";
@@ -15,25 +13,21 @@ var and = it;
         var project;
         before(function(){
             project = require("./fixture_fake_project_for_requirement_matrix").project;
-        });
 
-        given("a project with some requiremnets", function() {
             project.requirements.length.should.be.greaterThan(1);
+            console.log(project.use_cases.map(function(e){return e.subject + " " + e.id;}));
+            // 3 use cases
+            project.use_cases.length.should.equal(3);
         });
-        and(" with 3 uses cases", function() {
 
-           console.log(project.use_cases.map(function(e){return e.subject + " " + e.id;}));
-           // 3 use cases
-           project.use_cases.length.should.equal(3);
-        });
-       it("should populate the requirements collection of a workitem", function() {
+        it("should populate the requirements collection of a workitem", function() {
 
             project.associate_use_case_and_user_stories();
             project.associate_requirements();
 
             var use_case1 = project.use_cases[0];
-
             use_case1.subject.should.eql("UC1");
+
             use_case1.requirements.length.should.eql(2);
             use_case1.requirements[0].subject.should.eql("RQ1");
             use_case1.requirements[1].subject.should.eql("RQ2");
